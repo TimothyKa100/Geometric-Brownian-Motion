@@ -1,0 +1,386 @@
+"""
+Phase 3d — Greeks via Pathwise Differentiation & Likelihood Ratio Method
+=========================================================================
+
+Greeks measure sensitivity of option price to model parameters.
+Two Monte Carlo approaches for computing them without finite differences:
+
+  1. Pathwise / IPA (Infinitesimal Perturbation Analysis)
+       - Differentiates the payoff function along the path
+       - Requires payoff to be a.e. differentiable in the parameter
+       - Variance tends to be low
+
+  2. Likelihood Ratio Method (LRM) / Score function method
+       - Differentiates the density, not the path
+       - Works even when payoff is discontinuous (e.g. digital options)
+       - Higher variance but universally applicable
+
+Greeks covered:
+  Delta  — ∂C/∂S₀   (sensitivity to spot price)
+  Vega   — ∂C/∂σ    (sensitivity to volatility)
+  Rho    — ∂C/∂r    (sensitivity to interest rate)
+  Theta  — ∂C/∂T    (time decay, via finite difference)
+  Gamma  — ∂²C/∂S₀² (second-order spot sensitivity)
+"""
+
+from __future__ import annotations
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from scipy.stats import norm
+from models import GBMParams, euler_maruyama_gbm
+
+
+# =============================================================================
+# 1.  Black-Scholes analytical Greeks (ground truth)
+# =============================================================================
+
+def bs_price_and_greeks(S0, K, T, r, sigma):
+    d1 = (np.log(S0/K) + (r + 0.5*sigma**2)*T) / (sigma*np.sqrt(T))
+    d2 = d1 - sigma*np.sqrt(T)
+    price  = S0*norm.cdf(d1)   - K*np.exp(-r*T)*norm.cdf(d2)
+    delta  = norm.cdf(d1)
+    gamma  = norm.pdf(d1) / (S0 * sigma * np.sqrt(T))
+    vega   = S0 * norm.pdf(d1) * np.sqrt(T)
+    theta  = (-(S0*norm.pdf(d1)*sigma)/(2*np.sqrt(T))
+              - r*K*np.exp(-r*T)*norm.cdf(d2))
+    rho    = K * T * np.exp(-r*T) * norm.cdf(d2)
+    return {
+        "price": float(price), "delta": float(delta), "gamma": float(gamma),
+        "vega":  float(vega),  "theta": float(theta), "rho":   float(rho),
+    }
+
+
+# =============================================================================
+# 2.  Simulate terminal prices (shared across greek estimators)
+# =============================================================================
+
+def _simulate_terminal(S0, r, sigma, T, n_paths, seed):
+    """
+    Returns (S_T, Z) where Z are the standard normals used.
+    S_T = S0 * exp((r - 0.5*sigma^2)*T + sigma*sqrt(T)*Z)
+    (exact sampling — no discretisation error for terminal greeks)
+    """
+    rng = np.random.default_rng(seed)
+    Z   = rng.standard_normal(n_paths)
+    S_T = S0 * np.exp((r - 0.5*sigma**2)*T + sigma*np.sqrt(T)*Z)
+    return S_T, Z
+
+
+# =============================================================================
+# 3.  Pathwise Greeks (IPA)
+# =============================================================================
+
+def pathwise_delta(S0, K, T, r, sigma, n_paths=100_000, seed=0):
+    """
+    ∂C/∂S₀ = e^{-rT} * E[1_{S_T > K} * S_T / S₀]
+
+    Derivation: d(S_T)/d(S₀) = S_T/S₀, chain rule through max(S_T - K, 0).
+    """
+    S_T, _ = _simulate_terminal(S0, r, sigma, T, n_paths, seed)
+    discount = np.exp(-r*T)
+    indicator = (S_T > K).astype(float)
+    estimate = discount * np.mean(indicator * S_T / S0)
+    se = discount * np.std(indicator * S_T / S0) / np.sqrt(n_paths)
+    return float(estimate), float(se)
+
+
+def pathwise_vega(S0, K, T, r, sigma, n_paths=100_000, seed=0):
+    """
+    ∂C/∂σ = e^{-rT} * E[1_{S_T > K} * S_T * (Z*sqrt(T) - sigma*T)]
+
+    Derivation: d(S_T)/dσ = S_T * (Z*sqrt(T) - σ*T)
+    """
+    S_T, Z = _simulate_terminal(S0, r, sigma, T, n_paths, seed)
+    discount  = np.exp(-r*T)
+    indicator = (S_T > K).astype(float)
+    weight    = Z * np.sqrt(T) - sigma * T
+    estimate  = discount * np.mean(indicator * S_T * weight)
+    se        = discount * np.std(indicator * S_T * weight) / np.sqrt(n_paths)
+    return float(estimate), float(se)
+
+
+def pathwise_rho(S0, K, T, r, sigma, n_paths=100_000, seed=0):
+    """
+    ∂C/∂r = e^{-rT} * E[1_{S_T > K} * (S_T * T - K * T * e^{-rT})]
+    Approximate via d(S_T)/dr = S_T * T and discounting term.
+    """
+    S_T, _ = _simulate_terminal(S0, r, sigma, T, n_paths, seed)
+    discount  = np.exp(-r*T)
+    indicator = (S_T > K).astype(float)
+    # dC/dr = discount * E[ d/dr (S_T - K) * 1_{...} ] - T * discount * E[payoff]
+    payoff = np.maximum(S_T - K, 0.0)
+    estimate = discount * (T * np.mean(indicator * S_T) - T * np.mean(payoff))
+    se = discount * T * np.std(indicator * S_T - payoff) / np.sqrt(n_paths)
+    return float(estimate), float(se)
+
+
+# =============================================================================
+# 4.  Likelihood Ratio Greeks
+# =============================================================================
+
+def lr_delta(S0, K, T, r, sigma, n_paths=100_000, seed=0):
+    """
+    LR Delta: multiply payoff by score ∂log f/∂S₀ = Z / (S₀ * σ * sqrt(T))
+    Works for discontinuous payoffs (e.g. digital options).
+    """
+    S_T, Z = _simulate_terminal(S0, r, sigma, T, n_paths, seed)
+    discount = np.exp(-r*T)
+    payoff   = np.maximum(S_T - K, 0.0)
+    score    = Z / (S0 * sigma * np.sqrt(T))
+    estimate = discount * np.mean(payoff * score)
+    se = discount * np.std(payoff * score) / np.sqrt(n_paths)
+    return float(estimate), float(se)
+
+
+def lr_vega(S0, K, T, r, sigma, n_paths=100_000, seed=0):
+    """
+    LR Vega: score ∂log f/∂σ = (Z² - 1)/σ - Z * sqrt(T)
+    """
+    S_T, Z = _simulate_terminal(S0, r, sigma, T, n_paths, seed)
+    discount = np.exp(-r*T)
+    payoff   = np.maximum(S_T - K, 0.0)
+    score    = (Z**2 - 1)/sigma - Z * np.sqrt(T)
+    estimate = discount * np.mean(payoff * score)
+    se = discount * np.std(payoff * score) / np.sqrt(n_paths)
+    return float(estimate), float(se)
+
+
+def lr_gamma(S0, K, T, r, sigma, n_paths=100_000, seed=0):
+    """
+    LR Gamma via second-order score:
+    score = (Z² - 1 - Z/(σ*sqrt(T))) / (S₀² * σ² * T)
+    """
+    S_T, Z = _simulate_terminal(S0, r, sigma, T, n_paths, seed)
+    discount = np.exp(-r*T)
+    payoff   = np.maximum(S_T - K, 0.0)
+    h = S0 * sigma * np.sqrt(T)
+    score = (Z**2 - 1) / (h**2) - Z / (h * S0)
+    estimate = discount * np.mean(payoff * score)
+    se = discount * np.std(payoff * score) / np.sqrt(n_paths)
+    return float(estimate), float(se)
+
+
+# =============================================================================
+# 5.  Greeks vs spot (Greek profile)
+# =============================================================================
+
+def greek_profiles(K, T, r, sigma, S0_range, n_paths=50_000, seed=0):
+    """Compute delta, gamma, vega over a range of spot prices."""
+    pw_deltas, lr_deltas   = [], []
+    pw_vegas,  lr_vegas    = [], []
+    lr_gammas              = []
+    bs_deltas, bs_gammas, bs_vegas = [], [], []
+
+    for S0 in S0_range:
+        bs  = bs_price_and_greeks(S0, K, T, r, sigma)
+        bs_deltas.append(bs["delta"])
+        bs_gammas.append(bs["gamma"])
+        bs_vegas.append(bs["vega"])
+
+        d_pw, _ = pathwise_delta(S0, K, T, r, sigma, n_paths, seed)
+        d_lr, _ = lr_delta(S0, K, T, r, sigma, n_paths, seed)
+        v_pw, _ = pathwise_vega(S0, K, T, r, sigma, n_paths, seed)
+        v_lr, _ = lr_vega(S0, K, T, r, sigma, n_paths, seed)
+        g_lr, _ = lr_gamma(S0, K, T, r, sigma, n_paths, seed)
+
+        pw_deltas.append(d_pw); lr_deltas.append(d_lr)
+        pw_vegas.append(v_pw);  lr_vegas.append(v_lr)
+        lr_gammas.append(g_lr)
+
+    return {
+        "S0_range":  S0_range,
+        "bs_delta":  np.array(bs_deltas),
+        "bs_gamma":  np.array(bs_gammas),
+        "bs_vega":   np.array(bs_vegas),
+        "pw_delta":  np.array(pw_deltas),
+        "lr_delta":  np.array(lr_deltas),
+        "pw_vega":   np.array(pw_vegas),
+        "lr_vega":   np.array(lr_vegas),
+        "lr_gamma":  np.array(lr_gammas),
+    }
+
+
+# =============================================================================
+# 6.  Convergence: greek estimator error vs n_paths
+# =============================================================================
+
+def greek_convergence(S0, K, T, r, sigma, path_counts, seed=0):
+    bs = bs_price_and_greeks(S0, K, T, r, sigma)
+    pw_d_errors, lr_d_errors = [], []
+    pw_v_errors, lr_v_errors = [], []
+
+    for n in path_counts:
+        pw_d, _ = pathwise_delta(S0, K, T, r, sigma, n, seed)
+        lr_d, _ = lr_delta(S0, K, T, r, sigma, n, seed)
+        pw_v, _ = pathwise_vega(S0, K, T, r, sigma, n, seed)
+        lr_v, _ = lr_vega(S0, K, T, r, sigma, n, seed)
+        pw_d_errors.append(abs(pw_d - bs["delta"]))
+        lr_d_errors.append(abs(lr_d - bs["delta"]))
+        pw_v_errors.append(abs(pw_v - bs["vega"]))
+        lr_v_errors.append(abs(lr_v - bs["vega"]))
+
+    return {
+        "n_paths":       path_counts,
+        "pw_delta_err":  pw_d_errors,
+        "lr_delta_err":  lr_d_errors,
+        "pw_vega_err":   pw_v_errors,
+        "lr_vega_err":   lr_v_errors,
+        "bs_delta":      bs["delta"],
+        "bs_vega":       bs["vega"],
+    }
+
+
+# =============================================================================
+# 7.  Plots
+# =============================================================================
+
+def plot_all(S0, K, T, r, sigma):
+    plt.style.use("seaborn-v0_8-whitegrid")
+    fig = plt.figure(figsize=(15, 11))
+    gs  = gridspec.GridSpec(2, 3, figure=fig, hspace=0.42, wspace=0.35)
+
+    S0_range = np.arange(70, 140, 5, dtype=float)
+    profiles = greek_profiles(K, T, r, sigma, S0_range, n_paths=30_000)
+
+    # ── A: Delta profile ─────────────────────────────────────────────────────
+    ax_a = fig.add_subplot(gs[0, 0])
+    ax_a.plot(S0_range, profiles["bs_delta"],  "-",  color="k",       lw=2,   label="BS (analytical)")
+    ax_a.plot(S0_range, profiles["pw_delta"], "o--", color="#3C3489", lw=1.5, ms=5, label="Pathwise")
+    ax_a.plot(S0_range, profiles["lr_delta"], "x--", color="#0F6E56", lw=1.5, ms=6, label="LRM")
+    ax_a.axvline(K, color="gray", lw=1, ls=":")
+    ax_a.set_title("Delta  (∂C/∂S₀)")
+    ax_a.set_xlabel("S₀"); ax_a.set_ylabel("Delta")
+    ax_a.legend(fontsize=8); ax_a.grid(True, alpha=0.25)
+
+    # ── B: Vega profile ──────────────────────────────────────────────────────
+    ax_b = fig.add_subplot(gs[0, 1])
+    ax_b.plot(S0_range, profiles["bs_vega"],  "-",  color="k",       lw=2,   label="BS (analytical)")
+    ax_b.plot(S0_range, profiles["pw_vega"], "o--", color="#3C3489", lw=1.5, ms=5, label="Pathwise")
+    ax_b.plot(S0_range, profiles["lr_vega"], "x--", color="#0F6E56", lw=1.5, ms=6, label="LRM")
+    ax_b.axvline(K, color="gray", lw=1, ls=":")
+    ax_b.set_title("Vega  (∂C/∂σ)")
+    ax_b.set_xlabel("S₀"); ax_b.set_ylabel("Vega")
+    ax_b.legend(fontsize=8); ax_b.grid(True, alpha=0.25)
+
+    # ── C: Gamma profile ─────────────────────────────────────────────────────
+    ax_c = fig.add_subplot(gs[0, 2])
+    ax_c.plot(S0_range, profiles["bs_gamma"],  "-",  color="k",       lw=2,   label="BS (analytical)")
+    ax_c.plot(S0_range, profiles["lr_gamma"], "x--", color="#E85D24", lw=1.5, ms=6, label="LRM")
+    ax_c.axvline(K, color="gray", lw=1, ls=":")
+    ax_c.set_title("Gamma  (∂²C/∂S₀²)")
+    ax_c.set_xlabel("S₀"); ax_c.set_ylabel("Gamma")
+    ax_c.legend(fontsize=8); ax_c.grid(True, alpha=0.25)
+
+    # ── D: Greek convergence (delta) ─────────────────────────────────────────
+    ax_d = fig.add_subplot(gs[1, 0])
+    path_counts = [500, 1000, 3000, 5000, 10000, 30000, 50000, 100000]
+    conv = greek_convergence(S0, K, T, r, sigma, path_counts)
+    ax_d.loglog(conv["n_paths"], conv["pw_delta_err"], "o-", color="#3C3489", lw=2, label="Pathwise delta")
+    ax_d.loglog(conv["n_paths"], conv["lr_delta_err"], "s-", color="#0F6E56", lw=2, label="LRM delta")
+    ref = np.array(conv["n_paths"], dtype=float)**(-0.5)
+    ref *= conv["pw_delta_err"][0] / ref[0]
+    ax_d.loglog(conv["n_paths"], ref, "k--", lw=1, label=r"$O(n^{-1/2})$")
+    ax_d.set_title("Delta estimator convergence")
+    ax_d.set_xlabel("n_paths (log)"); ax_d.set_ylabel("|error|")
+    ax_d.legend(fontsize=8); ax_d.grid(True, which="both", alpha=0.25)
+
+    # ── E: Variance comparison pathwise vs LRM ───────────────────────────────
+    ax_e = fig.add_subplot(gs[1, 1])
+    n_reps = 100
+    rng = np.random.default_rng(1)
+    pw_samples = [pathwise_delta(S0, K, T, r, sigma, 2000, int(rng.integers(1e6)))[0]
+                  for _ in range(n_reps)]
+    lr_samples = [lr_delta(S0, K, T, r, sigma, 2000, int(rng.integers(1e6)))[0]
+                  for _ in range(n_reps)]
+    bs_d = bs_price_and_greeks(S0, K, T, r, sigma)["delta"]
+    bins = np.linspace(
+        min(min(pw_samples), min(lr_samples)) - 0.01,
+        max(max(pw_samples), max(lr_samples)) + 0.01, 30
+    )
+    ax_e.hist(pw_samples, bins=bins, alpha=0.55, color="#3C3489",
+              label=f"Pathwise  std={np.std(pw_samples):.4f}")
+    ax_e.hist(lr_samples, bins=bins, alpha=0.55, color="#0F6E56",
+              label=f"LRM       std={np.std(lr_samples):.4f}")
+    ax_e.axvline(bs_d, color="k", lw=2, ls="--", label=f"BS delta = {bs_d:.4f}")
+    ax_e.set_title("Pathwise vs LRM variance\n(n=2000 paths, 100 reps)")
+    ax_e.set_xlabel("Delta estimate"); ax_e.set_ylabel("Count")
+    ax_e.legend(fontsize=7); ax_e.grid(True, alpha=0.25)
+
+    # ── F: Greeks summary table at ATM ──────────────────────────────────────
+    ax_f = fig.add_subplot(gs[1, 2])
+    ax_f.axis("off")
+    bs = bs_price_and_greeks(S0, K, T, r, sigma)
+    pw_d, pw_d_se = pathwise_delta(S0, K, T, r, sigma, 100_000)
+    lr_d, lr_d_se = lr_delta(S0, K, T, r, sigma, 100_000)
+    pw_v, pw_v_se = pathwise_vega(S0, K, T, r, sigma, 100_000)
+    lr_v, lr_v_se = lr_vega(S0, K, T, r, sigma, 100_000)
+    lr_g, lr_g_se = lr_gamma(S0, K, T, r, sigma, 100_000)
+
+    rows = [
+        ["Greek",   "BS analytical", "Pathwise MC", "LRM MC"],
+        ["Delta",   f"{bs['delta']:.4f}", f"{pw_d:.4f}±{pw_d_se:.4f}", f"{lr_d:.4f}±{lr_d_se:.4f}"],
+        ["Vega",    f"{bs['vega']:.4f}",  f"{pw_v:.4f}±{pw_v_se:.4f}", f"{lr_v:.4f}±{lr_v_se:.4f}"],
+        ["Gamma",   f"{bs['gamma']:.4f}", "—",                           f"{lr_g:.4f}±{lr_g_se:.4f}"],
+        ["Theta",   f"{bs['theta']:.4f}", "—",                           "—"],
+        ["Rho",     f"{bs['rho']:.4f}",   "—",                           "—"],
+    ]
+    table = ax_f.table(cellText=rows[1:], colLabels=rows[0],
+                       cellLoc="center", loc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1.1, 1.6)
+    ax_f.set_title(f"Greeks at ATM (S₀=K={S0})", pad=20)
+
+    fig.suptitle("Phase 3d — Greeks: Pathwise vs Likelihood Ratio Method", fontsize=14)
+    plt.savefig("results/phase3d_greeks.png", dpi=140, bbox_inches="tight")
+    print("Saved → results/phase3d_greeks.png")
+    plt.show()
+
+
+# =============================================================================
+# 8.  Main
+# =============================================================================
+
+if __name__ == "__main__":
+    os.makedirs("results", exist_ok=True)
+
+    S0    = 100.0
+    K     = 100.0   # ATM
+    T     = 1.0
+    r     = 0.05
+    sigma = 0.20
+    N     = 100_000
+
+    print("=" * 60)
+    print("Phase 3d — Greeks: Pathwise & Likelihood Ratio Methods")
+    print("=" * 60)
+    print(f"S0={S0}, K={K}, T={T}y, r={r:.0%}, sigma={sigma:.0%}\n")
+
+    bs = bs_price_and_greeks(S0, K, T, r, sigma)
+    print("── Black-Scholes analytical ──")
+    for k, v in bs.items():
+        print(f"  {k:<8} = {v:.6f}")
+
+    print(f"\n── MC Greeks  (n_paths={N:,}) ──")
+    print(f"  {'Greek':<10} {'Pathwise':>14} {'LRM':>14} {'BS':>10}")
+    print("  " + "-"*52)
+
+    pw_d, pw_d_se = pathwise_delta(S0, K, T, r, sigma, N)
+    lr_d, lr_d_se = lr_delta(S0, K, T, r, sigma, N)
+    print(f"  {'Delta':<10} {pw_d:>10.4f}±{pw_d_se:.4f} {lr_d:>10.4f}±{lr_d_se:.4f} {bs['delta']:>10.4f}")
+
+    pw_v, pw_v_se = pathwise_vega(S0, K, T, r, sigma, N)
+    lr_v, lr_v_se = lr_vega(S0, K, T, r, sigma, N)
+    print(f"  {'Vega':<10} {pw_v:>10.4f}±{pw_v_se:.4f} {lr_v:>10.4f}±{lr_v_se:.4f} {bs['vega']:>10.4f}")
+
+    lr_g, lr_g_se = lr_gamma(S0, K, T, r, sigma, N)
+    print(f"  {'Gamma':<10} {'—':>14} {lr_g:>10.4f}±{lr_g_se:.4f} {bs['gamma']:>10.4f}")
+
+    pw_r, pw_r_se = pathwise_rho(S0, K, T, r, sigma, N)
+    print(f"  {'Rho':<10} {pw_r:>10.4f}±{pw_r_se:.4f} {'—':>14} {bs['rho']:>10.4f}")
+
+    plot_all(S0, K, T, r, sigma)
