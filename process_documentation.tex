@@ -106,6 +106,47 @@ The model layer also includes a few controlled extensions:
 
 These are not the core theoretical focus, but they are useful for stress-testing the same simulation and estimation pipeline under richer dynamics.
 
+\section{Model Understanding}
+
+\subsection{GBM: interpretation and implications}
+
+\paragraph{Why the noise is proportional to $S_t$.}
+In GBM, the diffusion term is $\sigma S_t\,\dd W_t$. This means uncertainty scales with the current level: a higher price has larger absolute fluctuations but similar relative fluctuations. This is consistent with many financial time series where percentage moves are more stable than absolute moves.
+
+\paragraph{Why $\log S_t$ is linear in $W_t$.}
+Applying It\^o's lemma to $f(S_t)=\log S_t$ gives
+\begin{equation}
+  \dd \log S_t = \left(\mu - \tfrac{1}{2}\sigma^2\right)\dd t + \sigma\,\dd W_t.
+\end{equation}
+Integrating over time,
+\begin{equation}
+  \log S_t = \log S_0 + \left(\mu - \tfrac{1}{2}\sigma^2\right)t + \sigma W_t,
+\end{equation}
+which is affine in Brownian motion.
+
+\paragraph{Consequence.}
+Since $\log S_t$ is Gaussian, $S_t$ is log-normal. In price space this produces a positively skewed distribution with a pronounced right tail relative to a symmetric Gaussian benchmark.
+
+\paragraph{Limitation.}
+GBM does not mean-revert and it assumes a simple volatility structure (constant $\sigma$ in the base model), which is often too restrictive for real markets with regime changes and volatility clustering.
+
+\subsection{OU: interpretation and implications}
+
+\paragraph{Why drift pulls toward $\mu$.}
+The drift term is $\theta(\mu-X_t)$. If $X_t>\mu$, then drift is negative; if $X_t<\mu$, then drift is positive. Therefore the deterministic component always pushes the process back toward the long-run level $\mu$.
+
+\paragraph{Why variance stabilizes.}
+For OU,
+\begin{equation}
+  \Var(X_t) = \frac{\sigma^2}{2\theta}\left(1-e^{-2\theta t}\right)
+  \xrightarrow[t\to\infty]{}
+  \frac{\sigma^2}{2\theta}.
+\end{equation}
+Unlike GBM, uncertainty does not grow without bound; it approaches a finite stationary variance.
+
+\paragraph{Interpretation.}
+OU is an equilibrium system with noise: random shocks continuously perturb the state, while the restoring force continuously pulls it back.
+
 \section{Application}
 
 \subsection{Simulation and validation workflow}
@@ -126,6 +167,39 @@ The validation layer in \texttt{analysis.py} computes moment summaries, standard
   \qquad
   \text{relative error} = \frac{|\hat\theta - \theta|}{\max(|\theta|,10^{-12})}.
 \end{equation}
+
+\subsection{Explicit validation results and interpretation}
+
+\paragraph{GBM validation.}
+Theoretical first moment is
+\begin{equation}
+  \E[S_t] = S_0 e^{\mu t}.
+\end{equation}
+Validation compares this benchmark to empirical path means from simulation. In practice, the comparison is visualized through path and terminal-distribution plots (for example, \texttt{gbm\_paths.png} and \texttt{gbm\_terminal\_hist.png}). For sufficiently fine $\Delta t$ and many paths, the gap between empirical and theoretical mean shrinks; the remaining discrepancy is primarily finite-sample Monte Carlo noise.
+
+\paragraph{OU validation.}
+Three checks are emphasized:
+\begin{enumerate}[leftmargin=1.5em]
+  \item mean reversion: empirical mean path approaches $\mu$,
+  \item variance stabilization: empirical variance approaches $\sigma^2/(2\theta)$,
+  \item dependence structure: autocorrelation decays approximately exponentially,
+  \begin{equation*}
+    \rho(k) \approx e^{-\theta k\Delta t}.
+  \end{equation*}
+\end{enumerate}
+The ACF and residual diagnostics (for example, \texttt{ou\_residual\_acf.png}) are used to assess whether the fitted model captures this decay pattern.
+
+\paragraph{Why mismatch occurs.}
+When theory and simulation do not perfectly align, the dominant causes are finite path count, finite horizon, and discretization error from Euler--Maruyama at larger $\Delta t$.
+
+\subsection{Depth-first takeaways (rather than feature catalogue)}
+
+This project is strongest when read through three deep threads:
+\begin{itemize}[leftmargin=1.2em]
+  \item \textbf{Behavioral contrast:} GBM is multiplicative and non-mean-reverting, while OU is additive and mean-reverting with finite stationary variance.
+  \item \textbf{Estimation quality:} transformed MLEs enforce parameter constraints and support direct error analysis (bias, RMSE, and confidence intervals).
+  \item \textbf{Monte Carlo convergence:} for option pricing and Greeks, simulation error scales with path count and can be separated from discretization effects.
+\end{itemize}
 
 \subsection{Parameter estimation}
 
@@ -162,7 +236,7 @@ These features are intended to evaluate finite-sample behavior rather than just 
 
 \subsection{First passage and barrier-style events}
 
-The file \texttt{first_passage.py} measures first hitting times. Given a barrier level $L$, the first passage time is the earliest index at which the path crosses the barrier. The code reports the hit probability and summary statistics of hitting times.
+The file \texttt{first\_passage.py} measures first hitting times. Given a barrier level $L$, the first passage time is the earliest index at which the path crosses the barrier. The code reports the hit probability and summary statistics of hitting times.
 
 For GBM this naturally connects to barrier option payoffs, while for OU it provides a convenient way to study threshold crossing in mean-reverting systems.
 
@@ -171,10 +245,10 @@ For GBM this naturally connects to barrier option payoffs, while for OU it provi
 The \texttt{options/} package turns the GBM model into a practical pricing and risk toolkit.
 
 \paragraph{Black-Scholes analytics.}
-The module \texttt{options/black_scholes.py} implements closed-form pricing for European calls, puts, and digital calls, together with Greeks. These formulas serve as the analytical benchmark for the simulation-based pricers.
+The module \texttt{options/black\_scholes.py} implements closed-form pricing for European calls, puts, and digital calls, together with Greeks. These formulas serve as the analytical benchmark for the simulation-based pricers.
 
 \paragraph{Monte Carlo option pricing.}
-The module \texttt{options/monte_carlo.py} prices:
+The module \texttt{options/monte\_carlo.py} prices:
 \begin{itemize}[leftmargin=1.2em]
   \item European call and put options,
   \item digital call options,
@@ -186,6 +260,14 @@ For vanilla GBM options, the code prefers exact GBM paths so that pricing error 
 
 \paragraph{Greeks.}
 The module \texttt{options/greeks.py} compares Black-Scholes Greeks to Monte Carlo estimators. It includes pathwise estimators and likelihood-ratio estimators, then visualizes convergence as the number of simulated paths increases.
+
+\subsection{Insight results}
+
+Two non-trivial insights emerge from the implemented studies:
+\begin{itemize}[leftmargin=1.2em]
+  \item \textbf{OU estimation bias at coarse sampling:} as $\Delta t$ increases, Euler-based OU likelihood approximations show stronger bias in $(\theta,\mu,\sigma)$ because transition linearization error becomes non-negligible.
+  \item \textbf{Exact-scheme GBM error decomposition:} when exact GBM transitions are used, discretization error is largely removed and Monte Carlo sampling error dominates pricing uncertainty, clarifying convergence diagnostics.
+\end{itemize}
 
 \paragraph{Portfolio risk.}
 The option stack also supports correlated multi-asset GBM simulation and portfolio VaR/CVaR calculations. That part of the code extends the same stochastic modeling core to a simple risk-management use case.
@@ -203,6 +285,31 @@ and the position is recovered by integrating velocity over time:
 
 This gives the repository a second application domain outside finance while reusing the same OU machinery and moment formulas.
 
+\section{Numerical Considerations}
+
+\subsection{Discretization bias and accuracy order}
+
+Euler--Maruyama introduces time-discretization error. For many SDEs, strong error scales like $O(\Delta t^{1/2})$ while weak error scales like $O(\Delta t)$. This means large $\Delta t$ can materially affect pathwise quantities and parameter estimation.
+
+\subsection{Stability and positivity}
+
+For GBM under Euler stepping,
+\begin{equation}
+  S_{n+1} = S_n\left(1+\mu\Delta t+\sigma\sqrt{\Delta t}Z_n\right)
+\end{equation}
+can become negative for extreme shocks, which is invalid for log-return-based estimation. The implementation therefore applies a positive floor to preserve numerical robustness.
+
+\subsection{Why exact schemes are preferred when available}
+
+When an exact transition is available (as for GBM), using it improves both realism and diagnostics:
+\begin{itemize}[leftmargin=1.2em]
+  \item positivity is guaranteed,
+  \item discretization bias is reduced,
+  \item Monte Carlo convergence reflects sampling effects more cleanly.
+\end{itemize}
+
+For OU, exact-transition likelihoods similarly reduce approximation error relative to purely Euler-based likelihoods, especially at coarser sampling intervals.
+
 \section{Code Details and Structure}
 
 \subsection{Top-level structure}
@@ -218,9 +325,9 @@ models.py & SDE parameters and simulators for GBM, OU, CIR, jump diffusion, and 
 simulate.py & Main orchestration script that runs experiments, saves plots, and writes summary CSV files. \\
 estimation.py & MLE routines, confidence intervals, and information criteria. \\
 analysis.py & Moment calculations, residual diagnostics, validation metrics, and hypothesis tests. \\
-first_passage.py & Barrier crossing and hitting-time summaries. \\
+first\_passage.py & Barrier crossing and hitting-time summaries. \\
 options/ & Pricing, Greeks, and Monte Carlo valuation utilities. \\
-physics_simulation/ & Langevin simulation and OU-moment checks for the physics extension. \\
+physics\_simulation/ & Langevin simulation and OU-moment checks for the physics extension. \\
 plots.py & Shared plotting helpers. \\
 results/ & Generated figures and CSV outputs. \\
 \bottomrule
