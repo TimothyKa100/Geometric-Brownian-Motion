@@ -1,0 +1,291 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  pdftitle={Geometric Brownian Motion and Ornstein-Uhlenbeck SDE Lab},
+}
+
+\title{Geometric Brownian Motion and Ornstein-Uhlenbeck SDE Lab}
+\author{Timothy Ka, Isaac Yang}
+\date{\today}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\N}{\mathcal{N}}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document describes the stochastic differential equation (SDE) models implemented in the codebase, the practical applications built on top of them, and the way the repository is organized. The focus is on two core processes: geometric Brownian motion (GBM) and Ornstein-Uhlenbeck (OU), together with their simulation, estimation, validation, option pricing, and physics-inspired extensions.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Theoretical Model}
+
+\subsection{Stochastic differential equations}
+
+The repository is built around It\^o SDEs of the form
+\begin{equation}
+  \dd X_t = a(X_t,t)\,\dd t + b(X_t,t)\,\dd W_t,
+\end{equation}
+where $a(X_t,t)$ is the drift, $b(X_t,t)$ is the diffusion, and $W_t$ is standard Brownian motion. The drift captures the deterministic trend while the diffusion captures random perturbations.
+
+\subsection{Geometric Brownian motion}
+
+GBM is the positive-valued model used for asset prices:
+\begin{equation}
+  \dd S_t = \mu S_t\,\dd t + \sigma S_t\,\dd W_t.
+\end{equation}
+
+The closed-form solution is
+\begin{equation}
+  S_t = S_0 \exp\left(\left(\mu - \tfrac{1}{2}\sigma^2\right)t + \sigma W_t\right),
+\end{equation}
+which implies that $S_t$ is log-normal and strictly positive in continuous time. This makes GBM the standard baseline for equity-style price modeling and a natural starting point for Black-Scholes pricing.
+
+In discrete time, the code uses the Euler--Maruyama update
+\begin{equation}
+  S_{n+1} = S_n\left(1 + \mu\Delta t + \sigma\sqrt{\Delta t}\,Z_n\right),
+  \qquad Z_n \sim \N(0,1).
+\end{equation}
+Because this approximation can produce rare negative values for coarse steps, the implementation clips values to a small positive floor. The code also includes the exact exponential transition
+\begin{equation}
+  S_{n+1} = S_n\exp\left(\left(\mu - \tfrac{1}{2}\sigma^2\right)\Delta t + \sigma\sqrt{\Delta t}\,Z_n\right),
+\end{equation}
+which preserves positivity exactly and is preferred in the option-pricing modules.
+
+\subsection{Ornstein-Uhlenbeck process}
+
+The OU process is a mean-reverting Gaussian model:
+\begin{equation}
+  \dd X_t = \theta(\mu - X_t)\,\dd t + \sigma\,\dd W_t.
+\end{equation}
+
+Its mean reversion can be seen from the exact conditional mean:
+\begin{equation}
+  \E[X_t\mid X_0] = \mu + (X_0 - \mu)e^{-\theta t}.
+\end{equation}
+
+The exact transition is Gaussian:
+\begin{align}
+  X_{t+\Delta t}\mid X_t &\sim \N\left(m_t, v_t\right), \\
+  m_t &= \mu + (X_t-\mu)e^{-\theta\Delta t}, \\
+  v_t &= \frac{\sigma^2}{2\theta}\left(1-e^{-2\theta\Delta t}\right), \qquad \theta > 0.
+\end{align}
+
+The code uses the Euler--Maruyama approximation for most simulations:
+\begin{equation}
+  X_{n+1} = X_n + \theta(\mu - X_n)\Delta t + \sigma\sqrt{\Delta t}\,Z_n.
+\end{equation}
+
+This process is used directly in the SDE lab and indirectly as the velocity model in the physics extension.
+
+\subsection{Other simulated regimes}
+
+The model layer also includes a few controlled extensions:
+\begin{itemize}[leftmargin=1.2em]
+  \item Jump-diffusion GBM with multiplicative log-normal jumps.
+  \item CIR dynamics with full-truncation Euler discretization.
+  \item Time-varying GBM and OU coefficients for non-stationary experiments.
+\end{itemize}
+
+These are not the core theoretical focus, but they are useful for stress-testing the same simulation and estimation pipeline under richer dynamics.
+
+\section{Application}
+
+\subsection{Simulation and validation workflow}
+
+The main runner in \texttt{simulate.py} orchestrates the experiment pipeline:
+\begin{enumerate}[leftmargin=1.5em]
+  \item simulate GBM and OU paths,
+  \item compute distributional summary statistics,
+  \item estimate parameters on representative paths,
+  \item compare estimates against known truth,
+  \item compute first-passage summaries,
+  \item generate plots and save results to \texttt{results/}.
+\end{enumerate}
+
+The validation layer in \texttt{analysis.py} computes moment summaries, standardized residuals, and estimation errors. For a true value $\theta$ and estimate $\hat\theta$, the code reports
+\begin{equation}
+  \text{absolute error} = |\hat\theta - \theta|,
+  \qquad
+  \text{relative error} = \frac{|\hat\theta - \theta|}{\max(|\theta|,10^{-12})}.
+\end{equation}
+
+\subsection{Parameter estimation}
+
+The estimation layer in \texttt{estimation.py} implements lightweight maximum likelihood estimators under discretized transition models.
+
+For GBM, the log return model is
+\begin{equation}
+  r_n = \log\left(\frac{S_{n+1}}{S_n}\right)
+  \sim \N\left(\left(\mu - \tfrac{1}{2}\sigma^2\right)\Delta t,\,\sigma^2\Delta t\right).
+\end{equation}
+The optimization is performed over transformed parameters $\bigl(\mu, \log\sigma\bigr)$ to guarantee positivity of $\sigma$.
+
+For OU, the Euler transition approximation is
+\begin{equation}
+  X_{n+1}\mid X_n \sim \N\left(X_n + \theta(\mu - X_n)\Delta t,\,\sigma^2\Delta t\right),
+\end{equation}
+and the code estimates $\bigl(\log\theta, \mu, \log\sigma\bigr)$. An exact-transition OU MLE is also available and is used where the exact Gaussian transition is appropriate.
+
+The optimizer is a simple coordinate-search routine with step shrinkage. That choice keeps the code dependency-light and easy to inspect, at the cost of being less sophisticated than a gradient-based solver.
+
+\subsection{Monte Carlo studies and uncertainty quantification}
+
+The repository includes repeated-simulation studies to measure estimator variability across many synthetic paths. The code writes replication-level estimates and summary statistics such as mean, bias, standard deviation, variance, and RMSE.
+
+It also includes uncertainty quantification features:
+\begin{itemize}[leftmargin=1.2em]
+  \item asymptotic confidence intervals from observed information,
+  \item parametric bootstrap confidence intervals,
+  \item empirical coverage summaries,
+  \item grid studies over $\Delta t$, $T$, and $N$.
+\end{itemize}
+
+These features are intended to evaluate finite-sample behavior rather than just point estimation.
+
+\subsection{First passage and barrier-style events}
+
+The file \texttt{first_passage.py} measures first hitting times. Given a barrier level $L$, the first passage time is the earliest index at which the path crosses the barrier. The code reports the hit probability and summary statistics of hitting times.
+
+For GBM this naturally connects to barrier option payoffs, while for OU it provides a convenient way to study threshold crossing in mean-reverting systems.
+
+\subsection{Options and risk applications}
+
+The \texttt{options/} package turns the GBM model into a practical pricing and risk toolkit.
+
+\paragraph{Black-Scholes analytics.}
+The module \texttt{options/black_scholes.py} implements closed-form pricing for European calls, puts, and digital calls, together with Greeks. These formulas serve as the analytical benchmark for the simulation-based pricers.
+
+\paragraph{Monte Carlo option pricing.}
+The module \texttt{options/monte_carlo.py} prices:
+\begin{itemize}[leftmargin=1.2em]
+  \item European call and put options,
+  \item digital call options,
+  \item arithmetic Asian calls,
+  \item barrier options,
+  \item European options on an OU-driven log-price.
+\end{itemize}
+For vanilla GBM options, the code prefers exact GBM paths so that pricing error is dominated by Monte Carlo variance rather than discretization bias.
+
+\paragraph{Greeks.}
+The module \texttt{options/greeks.py} compares Black-Scholes Greeks to Monte Carlo estimators. It includes pathwise estimators and likelihood-ratio estimators, then visualizes convergence as the number of simulated paths increases.
+
+\paragraph{Portfolio risk.}
+The option stack also supports correlated multi-asset GBM simulation and portfolio VaR/CVaR calculations. That part of the code extends the same stochastic modeling core to a simple risk-management use case.
+
+\subsection{Physics application}
+
+The \texttt{physics\_simulation/} package contains a 1D Langevin model in \texttt{langevin.py}. The velocity is modeled as an OU process:
+\begin{equation}
+  \dd V_t = -\gamma V_t\,\dd t + \sigma\,\dd W_t,
+\end{equation}
+and the position is recovered by integrating velocity over time:
+\begin{equation}
+  \dd X_t = V_t\,\dd t.
+\end{equation}
+
+This gives the repository a second application domain outside finance while reusing the same OU machinery and moment formulas.
+
+\section{Code Details and Structure}
+
+\subsection{Top-level structure}
+
+The repository is organized around a small set of focused modules:
+
+\begin{center}
+\begin{tabular}{>{\ttfamily}p{0.28\textwidth} p{0.64\textwidth}}
+\toprule
+File or folder & Role \\
+\midrule
+models.py & SDE parameters and simulators for GBM, OU, CIR, jump diffusion, and time-varying variants. \\
+simulate.py & Main orchestration script that runs experiments, saves plots, and writes summary CSV files. \\
+estimation.py & MLE routines, confidence intervals, and information criteria. \\
+analysis.py & Moment calculations, residual diagnostics, validation metrics, and hypothesis tests. \\
+first_passage.py & Barrier crossing and hitting-time summaries. \\
+options/ & Pricing, Greeks, and Monte Carlo valuation utilities. \\
+physics_simulation/ & Langevin simulation and OU-moment checks for the physics extension. \\
+plots.py & Shared plotting helpers. \\
+results/ & Generated figures and CSV outputs. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Core model layer}
+
+The \texttt{models.py} module defines the parameter dataclasses \texttt{GBMParams} and \texttt{OUParams}, then implements the primary simulators:
+\begin{itemize}[leftmargin=1.2em]
+  \item \texttt{euler\_maruyama\_gbm}
+  \item \texttt{euler\_maruyama\_ou}
+  \item \texttt{exact\_step\_gbm}
+  \item \texttt{euler\_maruyama\_jump\_diffusion\_gbm}
+  \item \texttt{euler\_maruyama\_cir}
+  \item \texttt{euler\_maruyama\_gbm\_time\_varying}
+  \item \texttt{euler\_maruyama\_ou\_time\_varying}
+\end{itemize}
+
+These functions enforce the most important model constraints up front, such as positivity of GBM initial values and non-negativity of key volatility or rate parameters.
+
+\subsection{Main runner}
+
+The main entry point is \texttt{simulate.py}. It contains separate functions for the major workflows:
+\begin{itemize}[leftmargin=1.2em]
+  \item \texttt{run\_gbm\_experiment} for GBM simulation, estimation, and first passage.
+  \item \texttt{run\_ou\_experiment} for OU simulation, estimation, and diagnostics.
+  \item \texttt{run\_residual\_diagnostics} for QQ plots, ACF plots, and Ljung-Box checks.
+  \item \texttt{run\_monte\_carlo\_study} for repeated estimation experiments.
+  \item \texttt{run\_uncertainty\_and\_coverage} for confidence interval coverage.
+  \item \texttt{run\_grid\_study} for sensitivity across sampling designs.
+  \item \texttt{run\_integrated\_options\_and\_risk} and \texttt{run\_langevin\_physics\_simulation} for the two application stacks.
+\end{itemize}
+
+The script writes output plots and CSVs to \texttt{results/}. In particular, the Monte Carlo and coverage routines save raw replication data plus summarized tables for downstream analysis.
+
+\subsection{Analysis and diagnostics}
+
+The \texttt{analysis.py} module is the validation layer. It computes sample moments, standardized residuals, QQ data, autocorrelation, and the Ljung-Box statistic. It also includes a likelihood-ratio test for testing $\theta = 0$ in the OU model, which acts as a simple check against pure drift-plus-noise behavior.
+
+\subsection{Estimation design}
+
+The estimator implementations in \texttt{estimation.py} use transformed parameters to respect constraints without introducing specialized constrained optimization dependencies. This is why the code works with variables such as $\log\sigma$ and $\log\theta$ internally, then maps back to the original parameter space only after optimization.
+
+The file also provides information criteria and confidence interval datatypes so the runner can present estimates, uncertainty, and model fit in a consistent format.
+
+\subsection{Plotting and outputs}
+
+The \texttt{plots.py} module creates the figures used across the project. The generated outputs typically include:
+\begin{itemize}[leftmargin=1.2em]
+  \item sample path figures,
+  \item terminal histograms,
+  \item hitting-time histograms,
+  \item residual QQ and ACF plots,
+  \item Monte Carlo estimate histograms,
+  \item option pricing dashboards,
+  \item Greeks convergence dashboards.
+\end{itemize}
+
+This separation keeps the computational code and visualization code from becoming entangled.
+
+\section{Conclusion}
+
+The codebase is built around a simple but useful pattern: start with analytically tractable SDEs, simulate them numerically, estimate their parameters from synthetic data, validate the estimators, and then reuse the same stochastic engine for finance and physics applications. GBM supplies the multiplicative positive process needed for pricing models, while OU provides a mean-reverting additive-noise process useful for both estimation studies and the Langevin extension.
+
+The current structure is intentionally modular. The theoretical model layer stays small, the application layer reuses those primitives in several domains, and the runner coordinates the full pipeline without burying the mathematics inside the orchestration logic.
+
+\end{document}
