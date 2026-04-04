@@ -59,6 +59,7 @@ from options.monte_carlo import (
 	mc_price_european_ou_log_price,
 )
 from options.portfolio_risk import portfolio_pnl, var_cvar
+from physics_simulation import LangevinParams, simulate_langevin_1d, velocity_theoretical_moments
 from plots import (
 	plot_acf,
 	plot_heatmap,
@@ -837,6 +838,73 @@ def run_integrated_options_and_risk(output_dir: Path) -> None:
 	plt.close(fig_pnl)
 
 
+def run_langevin_physics_simulation(output_dir: Path) -> None:
+	"""Physics simulation: underdamped Langevin particle with OU velocity."""
+	print("\nRunning physics simulation (Langevin particle)...")
+
+	params = LangevinParams(gamma=1.8, sigma=1.2)
+	x0 = 0.0
+	v0 = 0.8
+	horizon = 8.0
+	n_steps = 1200
+	n_paths = 4000
+	seed = 2026
+
+	times, positions, velocities = simulate_langevin_1d(
+		x0=x0,
+		v0=v0,
+		params=params,
+		horizon=horizon,
+		n_steps=n_steps,
+		n_paths=n_paths,
+		seed=seed,
+	)
+
+	v_mean_th, v_var_th = velocity_theoretical_moments(v0=v0, params=params, times=times)
+	v_mean_emp = np.mean(velocities, axis=0)
+	v_var_emp = np.var(velocities, axis=0)
+	x_mean_emp = np.mean(positions, axis=0)
+	x_var_emp = np.var(positions, axis=0)
+
+	print("Langevin summary:")
+	print(f"  gamma={params.gamma:.3f}, sigma={params.sigma:.3f}, horizon={horizon:.2f}, n_paths={n_paths}")
+	print(f"  E[V_T] empirical={v_mean_emp[-1]:.4f}, theory={v_mean_th[-1]:.4f}")
+	print(f"  Var[V_T] empirical={v_var_emp[-1]:.4f}, theory={v_var_th[-1]:.4f}")
+	print(f"  E[X_T] empirical={x_mean_emp[-1]:.4f}, Var[X_T] empirical={x_var_emp[-1]:.4f}")
+
+	fig_v_paths = plot_sample_paths(times, velocities[:35], "Langevin velocity paths (OU)")
+	fig_v_paths.savefig(output_dir / "physics_langevin_velocity_paths.png", dpi=130)
+	plt.close(fig_v_paths)
+
+	fig_x_paths = plot_sample_paths(times, positions[:35], "Langevin position paths")
+	fig_x_paths.savefig(output_dir / "physics_langevin_position_paths.png", dpi=130)
+	plt.close(fig_x_paths)
+
+	fig_v_mom, ax_v_mom = plt.subplots(figsize=(9, 5))
+	ax_v_mom.plot(times, v_mean_emp, label="Empirical mean velocity")
+	ax_v_mom.plot(times, v_mean_th, "--", label="Theoretical mean velocity")
+	ax_v_mom.plot(times, v_var_emp, label="Empirical velocity variance")
+	ax_v_mom.plot(times, v_var_th, "--", label="Theoretical velocity variance")
+	ax_v_mom.set_title("Langevin velocity moments: empirical vs theory")
+	ax_v_mom.set_xlabel("Time")
+	ax_v_mom.set_ylabel("Moment value")
+	ax_v_mom.grid(True, alpha=0.25)
+	ax_v_mom.legend()
+	fig_v_mom.tight_layout()
+	fig_v_mom.savefig(output_dir / "physics_langevin_velocity_moments.png", dpi=130)
+	plt.close(fig_v_mom)
+
+	fig_x_final, ax_x_final = plt.subplots(figsize=(9, 5))
+	ax_x_final.hist(positions[:, -1], bins=80, density=True, alpha=0.7)
+	ax_x_final.set_title("Langevin terminal position distribution")
+	ax_x_final.set_xlabel("X(T)")
+	ax_x_final.set_ylabel("Density")
+	ax_x_final.grid(True, alpha=0.25)
+	fig_x_final.tight_layout()
+	fig_x_final.savefig(output_dir / "physics_langevin_terminal_position.png", dpi=130)
+	plt.close(fig_x_final)
+
+
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description="SDE simulation and estimation runner")
 	parser.add_argument(
@@ -853,6 +921,11 @@ def parse_args() -> argparse.Namespace:
 		"--with-options",
 		action="store_true",
 		help="Run integrated options + risk module backed by models.py",
+	)
+	parser.add_argument(
+		"--with-physics",
+		action="store_true",
+		help="Run physics simulation module (Langevin particle with OU velocity)",
 	)
 	return parser.parse_args()
 
@@ -889,6 +962,9 @@ def main() -> None:
 
 	if args.with_options:
 		run_integrated_options_and_risk(output_dir=output_dir)
+
+	if args.with_physics:
+		run_langevin_physics_simulation(output_dir=output_dir)
 
 	print("\nAll requested tasks completed.")
 

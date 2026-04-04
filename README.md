@@ -17,6 +17,8 @@ Project layout:
 │   ├── black_scholes.py
 │   ├── monte_carlo.py
 │   └── portfolio_risk.py
+├── physics_simulation/ # practical physics simulations tied to SDE models
+│   └── langevin.py
 ├── plots.py           # all visualisations
 └── README.md
 ```
@@ -235,6 +237,13 @@ Integrated options/risk stack (now split into practical modules under `options/`
 - OU mean-reverting log-price Monte Carlo pricer,
 - correlated multi-asset GBM simulation + portfolio VaR/CVaR.
 
+Integrated physics simulation stack (under `physics_simulation/` and callable from `simulate.py`):
+
+- 1D underdamped Langevin particle,
+- velocity modeled as an OU process,
+- position obtained as the time-integral of velocity,
+- empirical velocity moments vs OU theoretical moments.
+
 ---
 
 ## 5. Conclusion
@@ -312,6 +321,12 @@ Run integrated options/risk module with the main pipeline:
 
 ```bash
 python simulate.py --mode full --with-options
+```
+
+Run integrated physics module with the main pipeline:
+
+```bash
+python simulate.py --mode full --with-physics
 ```
 
 Quick one-command run (legacy/default):
