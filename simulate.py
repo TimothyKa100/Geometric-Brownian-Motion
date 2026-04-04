@@ -44,7 +44,21 @@ from models import (
 	euler_maruyama_ou,
 	euler_maruyama_ou_time_varying,
 	exact_step_gbm,
+	simulate_correlated_gbm_paths,
 )
+from options.black_scholes import (
+	black_scholes_call_price,
+	black_scholes_digital_call_price,
+	black_scholes_greeks,
+	black_scholes_put_price,
+)
+from options.monte_carlo import (
+	mc_price_asian_arithmetic_call_gbm,
+	mc_price_barrier_gbm,
+	mc_price_european_gbm,
+	mc_price_european_ou_log_price,
+)
+from options.portfolio_risk import portfolio_pnl, var_cvar
 from plots import (
 	plot_acf,
 	plot_heatmap,
@@ -667,6 +681,162 @@ def run_regime_extension_experiments(output_dir: Path) -> None:
 	plt.close(fig_tv_ou)
 
 
+def run_integrated_options_and_risk(output_dir: Path) -> None:
+	"""Integrated options/risk demo backed directly by models.py APIs."""
+	print("\nRunning integrated options and portfolio-risk experiments...")
+
+	S0 = 100.0
+	K = 105.0
+	T = 1.0
+	r = 0.05
+	sigma = 0.20
+
+	bs_call = black_scholes_call_price(S0=S0, K=K, T=T, r=r, sigma=sigma)
+	bs_put = black_scholes_put_price(S0=S0, K=K, T=T, r=r, sigma=sigma)
+	bs_digital = black_scholes_digital_call_price(S0=S0, K=K, T=T, r=r, sigma=sigma)
+	greeks = black_scholes_greeks(S0=S0, K=K, T=T, r=r, sigma=sigma)
+
+	mc_call = mc_price_european_gbm(
+		S0=S0,
+		K=K,
+		T=T,
+		r=r,
+		sigma=sigma,
+		option="call",
+		n_paths=50_000,
+		seed=123,
+	)
+	mc_put = mc_price_european_gbm(
+		S0=S0,
+		K=K,
+		T=T,
+		r=r,
+		sigma=sigma,
+		option="put",
+		n_paths=50_000,
+		seed=123,
+	)
+	mc_asian = mc_price_asian_arithmetic_call_gbm(
+		S0=S0,
+		K=K,
+		T=T,
+		r=r,
+		sigma=sigma,
+		n_paths=50_000,
+		seed=124,
+	)
+	mc_barrier = mc_price_barrier_gbm(
+		S0=S0,
+		K=K,
+		T=T,
+		r=r,
+		sigma=sigma,
+		barrier=85.0,
+		direction="down",
+		knock="out",
+		option="call",
+		n_paths=60_000,
+		seed=125,
+	)
+
+	ou_log_params = OUParams(theta=1.2, mu=np.log(100.0), sigma=0.25)
+	mc_ou_call = mc_price_european_ou_log_price(
+		x0=np.log(S0),
+		ou_params=ou_log_params,
+		K=K,
+		T=T,
+		r=r,
+		option="call",
+		n_paths=50_000,
+		seed=321,
+	)
+
+	print("Options summary:")
+	print(f"  BS call={bs_call:.4f}, MC call={mc_call.price:.4f} +/- {1.96 * mc_call.se:.4f}")
+	print(f"  BS put ={bs_put:.4f}, MC put ={mc_put.price:.4f} +/- {1.96 * mc_put.se:.4f}")
+	print(f"  BS digital call={bs_digital:.4f}")
+	print(f"  Asian arithmetic call (MC)={mc_asian.price:.4f} +/- {1.96 * mc_asian.se:.4f}")
+	print(f"  Down-and-out call (MC)={mc_barrier.price:.4f} +/- {1.96 * mc_barrier.se:.4f}")
+	print(f"  OU mean-reverting log-price call (MC)={mc_ou_call.price:.4f} +/- {1.96 * mc_ou_call.se:.4f}")
+	print(
+		"  Greeks: "
+		f"delta(call)={greeks['call_delta']:.4f}, gamma={greeks['gamma']:.5f}, "
+		f"vega={greeks['vega']:.4f}, theta(call)={greeks['call_theta']:.4f}"
+	)
+
+	strikes = np.arange(70.0, 141.0, 5.0)
+	bs_calls = np.array([black_scholes_call_price(S0=S0, K=float(k), T=T, r=r, sigma=sigma) for k in strikes])
+	mc_calls = np.array(
+		[
+			mc_price_european_gbm(
+				S0=S0,
+				K=float(k),
+				T=T,
+				r=r,
+				sigma=sigma,
+				option="call",
+				n_paths=20_000,
+				seed=700 + i,
+			).price
+			for i, k in enumerate(strikes)
+		]
+	)
+
+	fig_chain, ax_chain = plt.subplots(figsize=(9, 5))
+	ax_chain.plot(strikes, bs_calls, "o-", label="BS call")
+	ax_chain.plot(strikes, mc_calls, "x--", label="MC call")
+	ax_chain.axvline(S0, color="gray", linestyle=":", linewidth=1.0)
+	ax_chain.set_title("Integrated option chain (GBM): MC vs Black-Scholes")
+	ax_chain.set_xlabel("Strike")
+	ax_chain.set_ylabel("Price")
+	ax_chain.grid(True, alpha=0.25)
+	ax_chain.legend()
+	fig_chain.tight_layout()
+	fig_chain.savefig(output_dir / "integrated_option_chain.png", dpi=130)
+	plt.close(fig_chain)
+
+	S0s = np.array([100.0, 100.0, 100.0])
+	mus = np.array([0.08, 0.06, 0.10])
+	sigmas = np.array([0.20, 0.15, 0.25])
+	weights = np.array([0.40, 0.35, 0.25])
+	corr = np.array([
+		[1.00, 0.45, 0.20],
+		[0.45, 1.00, 0.30],
+		[0.20, 0.30, 1.00],
+	])
+
+	_, corr_paths = simulate_correlated_gbm_paths(
+		S0s=S0s,
+		mus=mus,
+		sigmas=sigmas,
+		corr_matrix=corr,
+		horizon=1.0,
+		n_steps=252,
+		n_paths=50_000,
+		seed=900,
+	)
+	pnl = portfolio_pnl(corr_paths, weights)
+	rm95 = var_cvar(pnl, alpha=0.95)
+	rm99 = var_cvar(pnl, alpha=0.99)
+
+	print("Portfolio risk summary:")
+	print(f"  VaR 95%={rm95['VaR']:.4f}, CVaR 95%={rm95['CVaR']:.4f}")
+	print(f"  VaR 99%={rm99['VaR']:.4f}, CVaR 99%={rm99['CVaR']:.4f}")
+
+	fig_pnl, ax_pnl = plt.subplots(figsize=(9, 5))
+	ax_pnl.hist(pnl, bins=80, density=True, alpha=0.6)
+	ax_pnl.axvline(-rm95["VaR"], color="tab:red", linestyle="--", label=f"VaR 95%={rm95['VaR']:.3f}")
+	ax_pnl.axvline(-rm95["CVaR"], color="tab:green", linestyle=":", label=f"CVaR 95%={rm95['CVaR']:.3f}")
+	ax_pnl.set_title("Integrated portfolio PnL distribution (correlated GBM)")
+	ax_pnl.set_xlabel("Portfolio return")
+	ax_pnl.set_ylabel("Density")
+	ax_pnl.grid(True, alpha=0.25)
+	ax_pnl.legend()
+	fig_pnl.tight_layout()
+	fig_pnl.savefig(output_dir / "integrated_portfolio_pnl.png", dpi=130)
+	plt.close(fig_pnl)
+
+
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description="SDE simulation and estimation runner")
 	parser.add_argument(
@@ -679,6 +849,11 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument("--coverage-reps", type=int, default=60, help="Replications for CI coverage study")
 	parser.add_argument("--bootstrap-reps", type=int, default=80, help="Bootstrap samples per replication")
 	parser.add_argument("--grid-reps", type=int, default=40, help="Replications per (dt,T,N) grid cell")
+	parser.add_argument(
+		"--with-options",
+		action="store_true",
+		help="Run integrated options + risk module backed by models.py",
+	)
 	return parser.parse_args()
 
 
@@ -711,6 +886,9 @@ def main() -> None:
 		)
 		run_grid_study(output_dir=output_dir, n_replications=args.grid_reps)
 		run_regime_extension_experiments(output_dir=output_dir)
+
+	if args.with_options:
+		run_integrated_options_and_risk(output_dir=output_dir)
 
 	print("\nAll requested tasks completed.")
 

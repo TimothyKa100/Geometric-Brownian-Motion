@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -269,6 +270,91 @@ def euler_maruyama_ou_time_varying(
 		z = rng.standard_normal(n_paths)
 		prev = paths[:, step - 1]
 		paths[:, step] = prev + theta_t * (mu_t - prev) * dt + sigma_t * sqrt_dt * z
+
+	return times, paths
+
+
+@dataclass(frozen=True)
+class BlackScholesState:
+	"""d1/d2 state for Black-Scholes diffusion under lognormal assumptions."""
+
+	d1: float
+	d2: float
+
+
+def normal_cdf(x: float) -> float:
+	"""Standard normal CDF using the error function (no SciPy dependency)."""
+	return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def black_scholes_state(S0: float, K: float, T: float, r: float, sigma: float) -> BlackScholesState:
+	"""Return Black-Scholes d1/d2 terms used across analytical formulas."""
+	if S0 <= 0 or K <= 0:
+		raise ValueError("S0 and K must be strictly positive.")
+	if T <= 0:
+		raise ValueError("T must be strictly positive.")
+	if sigma <= 0:
+		raise ValueError("sigma must be strictly positive.")
+
+	d1 = (math.log(S0 / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+	d2 = d1 - sigma * math.sqrt(T)
+	return BlackScholesState(d1=float(d1), d2=float(d2))
+
+
+def black_scholes_log_moments(S0: float, T: float, r: float, sigma: float) -> tuple[float, float]:
+	"""Mean and std of log(S_T) under Black-Scholes risk-neutral dynamics."""
+	if S0 <= 0:
+		raise ValueError("S0 must be strictly positive.")
+	if T < 0:
+		raise ValueError("T must be non-negative.")
+	if sigma < 0:
+		raise ValueError("sigma must be non-negative.")
+
+	mean = math.log(S0) + (r - 0.5 * sigma**2) * T
+	std = sigma * math.sqrt(T)
+	return float(mean), float(std)
+
+
+def simulate_correlated_gbm_paths(
+	S0s: Array,
+	mus: Array,
+	sigmas: Array,
+	corr_matrix: Array,
+	horizon: float,
+	n_steps: int,
+	n_paths: int,
+	seed: Optional[int] = None,
+) -> tuple[Array, Array]:
+	"""Simulate correlated multi-asset GBM paths using Cholesky factorization."""
+	S0s = np.asarray(S0s, dtype=float)
+	mus = np.asarray(mus, dtype=float)
+	sigmas = np.asarray(sigmas, dtype=float)
+	corr_matrix = np.asarray(corr_matrix, dtype=float)
+
+	n_assets = S0s.size
+	if n_assets == 0:
+		raise ValueError("S0s must contain at least one asset.")
+	if mus.size != n_assets or sigmas.size != n_assets:
+		raise ValueError("S0s, mus, sigmas must have matching lengths.")
+	if corr_matrix.shape != (n_assets, n_assets):
+		raise ValueError("corr_matrix must have shape (n_assets, n_assets).")
+
+	rng = np.random.default_rng(seed)
+	dt = horizon / n_steps
+	sqrt_dt = np.sqrt(dt)
+	times = np.linspace(0.0, horizon, n_steps + 1)
+	paths = np.empty((n_paths, n_assets, n_steps + 1), dtype=float)
+	paths[:, :, 0] = S0s[np.newaxis, :]
+
+	cov = np.outer(sigmas, sigmas) * corr_matrix
+	L = np.linalg.cholesky(cov)
+	log_drift = (mus - 0.5 * sigmas**2) * dt
+
+	for step in range(1, n_steps + 1):
+		z_indep = rng.standard_normal((n_assets, n_paths))
+		z_corr = L @ z_indep
+		diffusion = z_corr.T * sqrt_dt
+		paths[:, :, step] = paths[:, :, step - 1] * np.exp(log_drift + diffusion)
 
 	return times, paths
 

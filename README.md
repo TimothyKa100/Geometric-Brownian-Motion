@@ -8,11 +8,15 @@ An exploratory project for simulating, estimating, and validating two foundation
 Project layout:
 
 ```
-├── models.py          # SDE definitions + simulators
+├── models.py          # theoretical SDE/BS model primitives + simulators
 ├── simulate.py        # experiment runner
 ├── estimation.py      # parameter estimation (optimisation here)
 ├── analysis.py        # statistics + validation
 ├── first_passage.py   # hitting time analysis
+├── options/           # practical option pricing + Greeks + MC apps
+│   ├── black_scholes.py
+│   ├── monte_carlo.py
+│   └── portfolio_risk.py
 ├── plots.py           # all visualisations
 └── README.md
 ```
@@ -224,6 +228,13 @@ The project now includes all major refinement tracks discussed:
 - model comparison metrics (AIC/BIC + OU LR test for $\theta=0$),
 - regime extensions: jump-diffusion GBM, CIR, and time-varying GBM/OU simulation.
 
+Integrated options/risk stack (now split into practical modules under `options/` and callable from `simulate.py`):
+
+- Black-Scholes analytics (call/put/digital + Greeks),
+- GBM Monte Carlo pricers (European, arithmetic Asian, barrier),
+- OU mean-reverting log-price Monte Carlo pricer,
+- correlated multi-asset GBM simulation + portfolio VaR/CVaR.
+
 ---
 
 ## 5. Conclusion
@@ -295,6 +306,12 @@ Run full advanced suite (all features):
 
 ```bash
 python simulate.py --mode full --mc-reps 300 --coverage-reps 60 --bootstrap-reps 80 --grid-reps 40
+```
+
+Run integrated options/risk module with the main pipeline:
+
+```bash
+python simulate.py --mode full --with-options
 ```
 
 Quick one-command run (legacy/default):
