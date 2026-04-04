@@ -176,6 +176,17 @@ For GBM and OU, the runner reports:
 
 This setup allows quick empirical checks of identifiability and finite-sample behavior under controlled synthetic data.
 
+### Monte Carlo study mode
+
+`simulate.py` now supports a repeated-estimation study mode to quantify estimator behavior across many synthetic paths.
+
+Outputs added in `results/`:
+
+- `monte_carlo_gbm_raw.csv` (replication-level GBM estimates)
+- `monte_carlo_ou_raw.csv` (replication-level OU estimates)
+- `monte_carlo_summary.csv` (mean, bias, std, variance, RMSE per parameter)
+- `monte_carlo_estimate_histograms.png` (distribution of estimated parameters)
+
 ---
 
 ## 4. Extensions
@@ -198,6 +209,20 @@ Potential high-value additions:
 - confidence intervals from observed Fisher information / Hessian,
 - stationarity diagnostics and half-life estimation,
 - residual normality and autocorrelation tests.
+
+### Implemented advanced package (now available)
+
+The project now includes all major refinement tracks discussed:
+
+- exact GBM transition simulation (`exact_step_gbm`),
+- exact-transition OU MLE (`estimate_ou_exact_mle`) alongside EM-MLE,
+- asymptotic CIs (observed Fisher via numerical Hessian),
+- parametric bootstrap CIs,
+- empirical CI coverage study,
+- grid study over $(\Delta t, T, N)$ with relative-RMSE heatmaps,
+- residual diagnostics (QQ + ACF + Ljung-Box Q statistic),
+- model comparison metrics (AIC/BIC + OU LR test for $\theta=0$),
+- regime extensions: jump-diffusion GBM, CIR, and time-varying GBM/OU simulation.
 
 ---
 
@@ -248,10 +273,34 @@ Install dependencies:
 pip install numpy matplotlib
 ```
 
-Run full experiment:
+Run baseline single experiment:
+
+```bash
+python simulate.py --mode single
+```
+
+Run Monte Carlo estimation study only:
+
+```bash
+python simulate.py --mode study --mc-reps 500
+```
+
+Run single + Monte Carlo (default behavior):
+
+```bash
+python simulate.py --mode all --mc-reps 300
+```
+
+Run full advanced suite (all features):
+
+```bash
+python simulate.py --mode full --mc-reps 300 --coverage-reps 60 --bootstrap-reps 80 --grid-reps 40
+```
+
+Quick one-command run (legacy/default):
 
 ```bash
 python simulate.py
 ```
 
-The script prints summary statistics and estimation diagnostics, then saves figures to `results/`.
+The script prints diagnostics and saves all artifacts to `results/`, including CI coverage and grid-study summaries in full mode.
