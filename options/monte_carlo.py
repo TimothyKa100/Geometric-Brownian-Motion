@@ -73,6 +73,29 @@ def mc_price_european_gbm(
     return _mc_summary(discounted)
 
 
+def mc_price_digital_call_gbm(
+    S0: float,
+    K: float,
+    T: float,
+    r: float,
+    sigma: float,
+    n_paths: int = 50_000,
+    n_steps: int = 252,
+    seed: Optional[int] = None,
+) -> OptionPriceEstimate:
+    if S0 <= 0 or K <= 0:
+        raise ValueError("S0 and K must be strictly positive.")
+    if sigma < 0:
+        raise ValueError("sigma must be non-negative.")
+
+    params = GBMParams(mu=r, sigma=sigma)
+    _, paths = exact_step_gbm(s0=S0, params=params, horizon=T, n_steps=n_steps, n_paths=n_paths, seed=seed)
+    terminal = paths[:, -1]
+    payoffs = (terminal > K).astype(float)
+    discounted = np.exp(-r * T) * payoffs
+    return _mc_summary(discounted)
+
+
 def mc_price_asian_arithmetic_call_gbm(
     S0: float,
     K: float,

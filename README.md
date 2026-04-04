@@ -15,6 +15,8 @@ Project layout:
 ├── first_passage.py   # hitting time analysis
 ├── options/           # practical option pricing + Greeks + MC apps
 │   ├── black_scholes.py
+│   ├── demo.py
+│   ├── greeks.py
 │   ├── monte_carlo.py
 │   └── portfolio_risk.py
 ├── physics_simulation/ # practical physics simulations tied to SDE models
@@ -237,6 +239,14 @@ Integrated options/risk stack (now split into practical modules under `options/`
 - OU mean-reverting log-price Monte Carlo pricer,
 - correlated multi-asset GBM simulation + portfolio VaR/CVaR.
 
+Standalone options dashboard:
+
+- European call/put and digital pricing,
+- Asian option comparison,
+- barrier option sensitivity,
+- pathwise vs likelihood-ratio Greeks,
+- saved dashboard figures in `results/`.
+
 Integrated physics simulation stack (under `physics_simulation/` and callable from `simulate.py`):
 
 - 1D underdamped Langevin particle,
@@ -323,10 +333,22 @@ Run integrated options/risk module with the main pipeline:
 python simulate.py --mode full --with-options
 ```
 
+Run the standalone options dashboard without the GBM/OU baseline:
+
+```bash
+python simulate.py --mode options
+```
+
 Run integrated physics module with the main pipeline:
 
 ```bash
 python simulate.py --mode full --with-physics
+```
+
+Run the standalone physics dashboard without the GBM/OU baseline:
+
+```bash
+python simulate.py --mode physics
 ```
 
 Quick one-command run (legacy/default):

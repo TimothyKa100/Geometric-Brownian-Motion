@@ -52,6 +52,7 @@ from options.black_scholes import (
 	black_scholes_greeks,
 	black_scholes_put_price,
 )
+from options.demo import run_options_demo
 from options.monte_carlo import (
 	mc_price_asian_arithmetic_call_gbm,
 	mc_price_barrier_gbm,
@@ -909,9 +910,9 @@ def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description="SDE simulation and estimation runner")
 	parser.add_argument(
 		"--mode",
-		choices=["single", "study", "all", "full"],
+		choices=["single", "study", "all", "full", "options", "physics"],
 		default="all",
-		help="single: one-shot experiments; study: Monte Carlo only; all: single+study; full: all advanced modules",
+		help="single: one-shot experiments; study: Monte Carlo only; all: single+study; full: all advanced modules; options: standalone options app; physics: standalone physics app",
 	)
 	parser.add_argument("--mc-reps", type=int, default=300, help="Replications for Monte Carlo estimation study")
 	parser.add_argument("--coverage-reps", type=int, default=60, help="Replications for CI coverage study")
@@ -934,6 +935,16 @@ def main() -> None:
 	args = parse_args()
 	output_dir = Path("results")
 	output_dir.mkdir(parents=True, exist_ok=True)
+
+	if args.mode == "options":
+		run_options_demo(output_dir=output_dir)
+		print("\nAll requested tasks completed.")
+		return
+
+	if args.mode == "physics":
+		run_langevin_physics_simulation(output_dir=output_dir)
+		print("\nAll requested tasks completed.")
+		return
 
 	if args.mode in ("single", "all", "full"):
 		gbm_path, gbm_dt, _gbm_params, gbm_est = run_gbm_experiment(output_dir=output_dir)
