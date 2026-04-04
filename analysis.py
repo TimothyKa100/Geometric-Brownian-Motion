@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import numpy as np
 
@@ -71,3 +72,79 @@ def validate_ou_estimates(true_params: OUParams, estimated: OUMLE) -> dict[str, 
         "mu": error_metrics(true_params.mu, estimated.mu),
         "sigma": error_metrics(true_params.sigma, estimated.sigma),
     }
+
+
+def gbm_standardized_residuals(prices: Array, mu_hat: float, sigma_hat: float, dt: float) -> Array:
+    returns = np.diff(np.log(prices))
+    mean = (mu_hat - 0.5 * sigma_hat**2) * dt
+    std = max(sigma_hat * np.sqrt(dt), 1e-12)
+    return (returns - mean) / std
+
+
+def ou_standardized_residuals(series: Array, theta_hat: float, mu_hat: float, sigma_hat: float, dt: float) -> Array:
+    x_prev = series[:-1]
+    x_next = series[1:]
+    mean = x_prev + theta_hat * (mu_hat - x_prev) * dt
+    std = max(sigma_hat * np.sqrt(dt), 1e-12)
+    return (x_next - mean) / std
+
+
+def autocorrelation(x: Array, max_lag: int = 20) -> Array:
+    x = np.asarray(x, dtype=float)
+    x = x - np.mean(x)
+    denom = np.sum(x**2)
+    if denom <= 0:
+        return np.zeros(max_lag + 1)
+
+    acf = np.empty(max_lag + 1, dtype=float)
+    acf[0] = 1.0
+    for lag in range(1, max_lag + 1):
+        acf[lag] = np.sum(x[:-lag] * x[lag:]) / denom
+    return acf
+
+
+def ljung_box_q(residuals: Array, lags: int = 10) -> float:
+    n = len(residuals)
+    if n <= lags + 1:
+        return float("nan")
+    acf = autocorrelation(residuals, max_lag=lags)
+    q = n * (n + 2.0) * np.sum((acf[1:] ** 2) / (n - np.arange(1, lags + 1)))
+    return float(q)
+
+
+def qq_data_normal(residuals: Array) -> tuple[Array, Array]:
+    """Return theoretical and empirical quantiles for QQ visualization.
+
+    Uses a large normal sample approximation to avoid external SciPy dependency.
+    """
+    n = len(residuals)
+    if n == 0:
+        return np.array([]), np.array([])
+
+    rng = np.random.default_rng(12345)
+    normal_sample = np.sort(rng.standard_normal(200_000))
+    probs = (np.arange(1, n + 1) - 0.5) / n
+    idx = np.minimum((probs * (len(normal_sample) - 1)).astype(int), len(normal_sample) - 1)
+    theo = normal_sample[idx]
+    emp = np.sort(residuals)
+    return theo, emp
+
+
+def likelihood_ratio_test_ou_theta_zero(series: Array, theta_hat: float, mu_hat: float, sigma_hat: float, dt: float) -> tuple[float, float]:
+    """LR test for H0: theta=0 (OU reduces to Brownian with drift)."""
+    x_prev = series[:-1]
+    x_next = series[1:]
+
+    mean_full = x_prev + theta_hat * (mu_hat - x_prev) * dt
+    var_full = sigma_hat**2 * dt
+    ll_full = -0.5 * len(x_prev) * np.log(2.0 * np.pi * var_full) - 0.5 * np.sum((x_next - mean_full) ** 2 / var_full)
+
+    drift0 = np.mean((x_next - x_prev) / dt)
+    residual0 = x_next - (x_prev + drift0 * dt)
+    sigma0 = np.sqrt(max(np.mean(residual0**2) / dt, 1e-12))
+    var0 = sigma0**2 * dt
+    ll_null = -0.5 * len(x_prev) * np.log(2.0 * np.pi * var0) - 0.5 * np.sum((residual0**2) / var0)
+
+    lr = max(2.0 * (ll_full - ll_null), 0.0)
+    p_value = math.erfc(np.sqrt(lr / 2.0))
+    return float(lr), float(p_value)

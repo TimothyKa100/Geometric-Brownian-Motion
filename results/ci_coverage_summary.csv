@@ -1,0 +1,11 @@
+model,parameter,ci_type,empirical_coverage
+GBM,mu,asymptotic,0.875
+GBM,mu,bootstrap,0.875
+GBM,sigma,asymptotic,0.875
+GBM,sigma,bootstrap,0.75
+OU,theta,asymptotic,0.5
+OU,theta,bootstrap,0.125
+OU,mu,asymptotic,0.25
+OU,mu,bootstrap,0.125
+OU,sigma,asymptotic,1.0
+OU,sigma,bootstrap,0.625
