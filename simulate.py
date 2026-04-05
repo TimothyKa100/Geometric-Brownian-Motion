@@ -11,10 +11,17 @@ import numpy as np
 from analysis import (
 	autocorrelation,
 	gbm_log_return_stats,
+	gbm_empirical_mean,
+	gbm_theoretical_mean,
 	gbm_standardized_residuals,
 	likelihood_ratio_test_ou_theta_zero,
 	ljung_box_q,
+	max_relative_error,
 	ou_increment_stats,
+	ou_empirical_mean,
+	ou_empirical_variance,
+	ou_theoretical_mean,
+	ou_theoretical_variance,
 	ou_standardized_residuals,
 	qq_data_normal,
 	validate_gbm_estimates,
@@ -60,11 +67,19 @@ from options.monte_carlo import (
 	mc_price_european_ou_log_price,
 )
 from options.portfolio_risk import portfolio_pnl, var_cvar
-from physics_simulation import LangevinParams, simulate_langevin_1d, velocity_theoretical_moments
+from physics_simulation import (
+	LangevinParams,
+	QuantumGBMDecoherenceParams,
+	simulate_langevin_1d,
+	simulate_quantum_decoherence_gbm,
+	velocity_theoretical_moments,
+)
 from plots import (
 	plot_acf,
 	plot_heatmap,
 	plot_hitting_time_histogram,
+	plot_mean_comparison,
+	plot_ou_moment_comparison,
 	plot_qq,
 	plot_sample_paths,
 	plot_terminal_histogram,
@@ -171,6 +186,17 @@ def run_gbm_experiment(output_dir: Path) -> tuple[np.ndarray, float, GBMParams, 
 	print("GBM log-return moments (EM paths):")
 	print(f"mean={stats.mean:.6f}, std={stats.std:.6f}, skew={stats.skew:.6f}, kurtosis={stats.kurtosis:.6f}")
 
+	empirical_mean = gbm_empirical_mean(em_paths)
+	theoretical_mean = gbm_theoretical_mean(s0=s0, mu=params.mu, times=times)
+	gbm_mean_rel_err_max = max_relative_error(empirical_mean, theoretical_mean)
+	gbm_mean_rel_rmse = float(
+		np.sqrt(np.mean(((empirical_mean - theoretical_mean) / np.maximum(np.abs(theoretical_mean), 1e-12)) ** 2))
+	)
+	print(
+		"GBM empirical vs theoretical mean: "
+		f"max_rel_error={gbm_mean_rel_err_max:.4%}, rel_rmse={gbm_mean_rel_rmse:.4%}"
+	)
+
 	representative_path = em_paths[0]
 	est = estimate_gbm_mle(representative_path, dt=dt)
 	validation = validate_gbm_estimates(params, est)
@@ -198,16 +224,35 @@ def run_gbm_experiment(output_dir: Path) -> tuple[np.ndarray, float, GBMParams, 
 	fig_exact = plot_sample_paths(times, exact_paths[:40], "GBM sample paths (Exact transition)")
 	fig_terminal = plot_terminal_histogram(em_paths, "GBM terminal distribution")
 	fig_hit = plot_hitting_time_histogram(finite_times, f"GBM hitting time histogram (level={upper_barrier})")
+	fig_mean_check = plot_mean_comparison(
+		times=times,
+		empirical=empirical_mean,
+		theoretical=theoretical_mean,
+		title="GBM empirical vs theoretical mean",
+		ylabel="Mean price",
+	)
 
 	fig_paths.savefig(output_dir / "gbm_paths.png", dpi=130)
 	fig_exact.savefig(output_dir / "gbm_exact_paths.png", dpi=130)
 	fig_terminal.savefig(output_dir / "gbm_terminal_hist.png", dpi=130)
 	fig_hit.savefig(output_dir / "gbm_hitting_times.png", dpi=130)
+	fig_mean_check.savefig(output_dir / "gbm_mean_vs_theory.png", dpi=130)
+
+	gbm_validation_rows: list[list[float | str]] = []
+	for t, emp, theo in zip(times, empirical_mean, theoretical_mean):
+		rel = abs(emp - theo) / max(abs(theo), 1e-12)
+		gbm_validation_rows.append([float(t), float(emp), float(theo), float(rel)])
+	_write_csv(
+		output_dir / "gbm_moment_validation.csv",
+		header=["time", "empirical_mean", "theoretical_mean", "relative_error"],
+		rows=gbm_validation_rows,
+	)
 
 	plt.close(fig_paths)
 	plt.close(fig_exact)
 	plt.close(fig_terminal)
 	plt.close(fig_hit)
+	plt.close(fig_mean_check)
 
 	return representative_path, dt, params, est
 
@@ -233,6 +278,24 @@ def run_ou_experiment(output_dir: Path) -> tuple[np.ndarray, float, OUParams, ob
 	stats = ou_increment_stats(paths)
 	print("\nOU increment moments:")
 	print(f"mean={stats.mean:.6f}, std={stats.std:.6f}, skew={stats.skew:.6f}, kurtosis={stats.kurtosis:.6f}")
+
+	empirical_mean = ou_empirical_mean(paths)
+	theoretical_mean = ou_theoretical_mean(x0=x0, theta=params.theta, mu=params.mu, times=times)
+	empirical_var = ou_empirical_variance(paths)
+	theoretical_var = ou_theoretical_variance(theta=params.theta, sigma=params.sigma, times=times)
+	stationary_var = params.sigma**2 / (2.0 * params.theta)
+
+	ou_mean_max_abs_error = float(np.max(np.abs(empirical_mean - theoretical_mean)))
+	ou_mean_scale = max(abs(params.mu), abs(x0), 1e-12)
+	ou_mean_scaled_max_error = ou_mean_max_abs_error / ou_mean_scale
+	ou_var_rel_err_max = max_relative_error(empirical_var[1:], theoretical_var[1:])
+	ou_stationary_rel_gap = abs(empirical_var[-1] - stationary_var) / max(abs(stationary_var), 1e-12)
+	print(
+		"OU empirical vs theoretical moments: "
+		f"mean_scaled_max_error={ou_mean_scaled_max_error:.4%}, "
+		f"var_max_rel_error={ou_var_rel_err_max:.4%}, "
+		f"terminal_var_vs_stationary_gap={ou_stationary_rel_gap:.4%}"
+	)
 
 	representative_path = paths[0]
 	est_em = estimate_ou_mle(representative_path, dt=dt)
@@ -279,14 +342,43 @@ def run_ou_experiment(output_dir: Path) -> tuple[np.ndarray, float, OUParams, ob
 	fig_paths = plot_sample_paths(times, paths[:40], "OU sample paths (Euler-Maruyama)")
 	fig_terminal = plot_terminal_histogram(paths, "OU terminal distribution")
 	fig_hit = plot_hitting_time_histogram(finite_times, f"OU hitting time histogram (level={upper_barrier})")
+	fig_moment_check = plot_ou_moment_comparison(
+		times=times,
+		empirical_mean=empirical_mean,
+		theoretical_mean=theoretical_mean,
+		empirical_var=empirical_var,
+		theoretical_var=theoretical_var,
+		stationary_var=stationary_var,
+	)
 
 	fig_paths.savefig(output_dir / "ou_paths.png", dpi=130)
 	fig_terminal.savefig(output_dir / "ou_terminal_hist.png", dpi=130)
 	fig_hit.savefig(output_dir / "ou_hitting_times.png", dpi=130)
+	fig_moment_check.savefig(output_dir / "ou_moments_vs_theory.png", dpi=130)
+
+	ou_validation_rows: list[list[float | str]] = []
+	for t, emp_m, theo_m, emp_v, theo_v in zip(times, empirical_mean, theoretical_mean, empirical_var, theoretical_var):
+		mean_rel = abs(emp_m - theo_m) / max(abs(theo_m), 1e-12)
+		var_rel = abs(emp_v - theo_v) / max(abs(theo_v), 1e-12)
+		ou_validation_rows.append([float(t), float(emp_m), float(theo_m), float(emp_v), float(theo_v), float(mean_rel), float(var_rel)])
+	_write_csv(
+		output_dir / "ou_moment_validation.csv",
+		header=[
+			"time",
+			"empirical_mean",
+			"theoretical_mean",
+			"empirical_variance",
+			"theoretical_variance",
+			"mean_relative_error",
+			"variance_relative_error",
+		],
+		rows=ou_validation_rows,
+	)
 
 	plt.close(fig_paths)
 	plt.close(fig_terminal)
 	plt.close(fig_hit)
+	plt.close(fig_moment_check)
 
 	return representative_path, dt, params, est_em, est_exact
 
@@ -904,6 +996,65 @@ def run_langevin_physics_simulation(output_dir: Path) -> None:
 	fig_x_final.tight_layout()
 	fig_x_final.savefig(output_dir / "physics_langevin_terminal_position.png", dpi=130)
 	plt.close(fig_x_final)
+
+	print("\nRunning quantum decoherence simulation (GBM-driven dephasing)...")
+	q_gbm_params = GBMParams(mu=0.03, sigma=0.25)
+	q_params = QuantumGBMDecoherenceParams(
+		dephasing_rate=0.08,
+		coupling=3.0,
+		excited_population=0.5,
+		visibility=1.0,
+		phase0=0.0,
+		carrier_frequency=0.0,
+	)
+
+	q_times, q_prices, q_coh_paths, q_coh_mean, q_purity, q_theory_env = simulate_quantum_decoherence_gbm(
+		s0=100.0,
+		gbm_params=q_gbm_params,
+		q_params=q_params,
+		horizon=6.0,
+		n_steps=900,
+		n_paths=3000,
+		seed=3030,
+	)
+
+	print("Quantum decoherence summary (GBM driver):")
+	print(
+		f"  mu={q_gbm_params.mu:.3f}, sigma={q_gbm_params.sigma:.3f}, "
+		f"gamma_phi={q_params.dephasing_rate:.3f}, coupling={q_params.coupling:.3f}"
+	)
+	print(
+		f"  |E[c_0]|={np.abs(q_coh_mean[0]):.4f}, "
+		f"|E[c_T]| empirical={np.abs(q_coh_mean[-1]):.4f}, theory={q_theory_env[-1]:.4f}"
+	)
+	print(f"  Purity(t=0)={q_purity[0]:.4f}, Purity(t=T)={q_purity[-1]:.4f}")
+
+	fig_q_gbm = plot_sample_paths(q_times, q_prices[:30], "GBM paths driving quantum phase noise")
+	fig_q_gbm.savefig(output_dir / "physics_quantum_gbm_driver_paths.png", dpi=130)
+	plt.close(fig_q_gbm)
+
+	fig_q_coh, ax_q_coh = plt.subplots(figsize=(9, 5))
+	ax_q_coh.plot(q_times, np.abs(q_coh_mean), label="Empirical |E[c_t]|")
+	ax_q_coh.plot(q_times, q_theory_env, "--", label="Theory envelope")
+	ax_q_coh.set_title("GBM-driven quantum decoherence envelope")
+	ax_q_coh.set_xlabel("Time")
+	ax_q_coh.set_ylabel("Coherence magnitude")
+	ax_q_coh.grid(True, alpha=0.25)
+	ax_q_coh.legend()
+	fig_q_coh.tight_layout()
+	fig_q_coh.savefig(output_dir / "physics_quantum_decoherence_envelope.png", dpi=130)
+	plt.close(fig_q_coh)
+
+	fig_q_purity, ax_q_purity = plt.subplots(figsize=(9, 5))
+	ax_q_purity.plot(q_times, q_purity, label="Ensemble purity")
+	ax_q_purity.set_title("Ensemble purity under GBM-driven dephasing")
+	ax_q_purity.set_xlabel("Time")
+	ax_q_purity.set_ylabel("Purity")
+	ax_q_purity.grid(True, alpha=0.25)
+	ax_q_purity.legend()
+	fig_q_purity.tight_layout()
+	fig_q_purity.savefig(output_dir / "physics_quantum_decoherence_purity.png", dpi=130)
+	plt.close(fig_q_purity)
 
 
 def parse_args() -> argparse.Namespace:

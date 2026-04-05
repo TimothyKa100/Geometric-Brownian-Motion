@@ -104,3 +104,53 @@ def plot_heatmap(
 
     fig.tight_layout()
     return fig
+
+
+def plot_mean_comparison(
+    times: Array,
+    empirical: Array,
+    theoretical: Array,
+    title: str,
+    ylabel: str,
+) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.plot(times, empirical, linewidth=2.0, label="Empirical")
+    ax.plot(times, theoretical, linewidth=2.0, linestyle="--", label="Theoretical")
+    ax.set_title(title)
+    ax.set_xlabel("Time")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    return fig
+
+
+def plot_ou_moment_comparison(
+    times: Array,
+    empirical_mean: Array,
+    theoretical_mean: Array,
+    empirical_var: Array,
+    theoretical_var: Array,
+    stationary_var: float,
+) -> plt.Figure:
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.8))
+
+    axes[0].plot(times, empirical_mean, linewidth=2.0, label="Empirical mean")
+    axes[0].plot(times, theoretical_mean, linewidth=2.0, linestyle="--", label="Theoretical mean")
+    axes[0].set_title("OU mean reversion check")
+    axes[0].set_xlabel("Time")
+    axes[0].set_ylabel("Mean")
+    axes[0].grid(True, alpha=0.25)
+    axes[0].legend()
+
+    axes[1].plot(times, empirical_var, linewidth=2.0, label="Empirical variance")
+    axes[1].plot(times, theoretical_var, linewidth=2.0, linestyle="--", label="Theoretical variance")
+    axes[1].axhline(stationary_var, linestyle=":", linewidth=1.8, label="Stationary variance")
+    axes[1].set_title("OU variance stabilization check")
+    axes[1].set_xlabel("Time")
+    axes[1].set_ylabel("Variance")
+    axes[1].grid(True, alpha=0.25)
+    axes[1].legend()
+
+    fig.tight_layout()
+    return fig

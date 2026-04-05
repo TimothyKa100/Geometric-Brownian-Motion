@@ -74,6 +74,35 @@ def validate_ou_estimates(true_params: OUParams, estimated: OUMLE) -> dict[str, 
     }
 
 
+def gbm_empirical_mean(paths: Array) -> Array:
+    return np.mean(paths, axis=0)
+
+
+def gbm_theoretical_mean(s0: float, mu: float, times: Array) -> Array:
+    return s0 * np.exp(mu * times)
+
+
+def ou_empirical_mean(paths: Array) -> Array:
+    return np.mean(paths, axis=0)
+
+
+def ou_empirical_variance(paths: Array) -> Array:
+    return np.var(paths, axis=0, ddof=1)
+
+
+def ou_theoretical_mean(x0: float, theta: float, mu: float, times: Array) -> Array:
+    return mu + (x0 - mu) * np.exp(-theta * times)
+
+
+def ou_theoretical_variance(theta: float, sigma: float, times: Array) -> Array:
+    return (sigma**2 / (2.0 * theta)) * (1.0 - np.exp(-2.0 * theta * times))
+
+
+def max_relative_error(empirical: Array, theoretical: Array, eps: float = 1e-12) -> float:
+    denom = np.maximum(np.abs(theoretical), eps)
+    return float(np.max(np.abs(empirical - theoretical) / denom))
+
+
 def gbm_standardized_residuals(prices: Array, mu_hat: float, sigma_hat: float, dt: float) -> Array:
     returns = np.diff(np.log(prices))
     mean = (mu_hat - 0.5 * sigma_hat**2) * dt

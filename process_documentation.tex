@@ -111,7 +111,11 @@ These are not the core theoretical focus, but they are useful for stress-testing
 \subsection{GBM: interpretation and implications}
 
 \paragraph{Why the noise is proportional to $S_t$.}
-In GBM, the diffusion term is $\sigma S_t\,\dd W_t$. This means uncertainty scales with the current level: a higher price has larger absolute fluctuations but similar relative fluctuations. This is consistent with many financial time series where percentage moves are more stable than absolute moves.
+In GBM, the diffusion term is $\sigma S_t\,\dd W_t$. Because the diffusion is proportional to the level, the relative increment
+\begin{equation}
+  \frac{\dd S_t}{S_t} = \mu\,\dd t + \sigma\,\dd W_t
+\end{equation}
+has level-independent instantaneous variance $\sigma^2\dd t$. The implication is that stationarity is expected in log-returns rather than in prices, which matches common empirical practice in financial time-series modeling.
 
 \paragraph{Why $\log S_t$ is linear in $W_t$.}
 Applying It\^o's lemma to $f(S_t)=\log S_t$ gives
@@ -128,7 +132,7 @@ which is affine in Brownian motion.
 Since $\log S_t$ is Gaussian, $S_t$ is log-normal. In price space this produces a positively skewed distribution with a pronounced right tail relative to a symmetric Gaussian benchmark.
 
 \paragraph{Limitation.}
-GBM does not mean-revert and it assumes a simple volatility structure (constant $\sigma$ in the base model), which is often too restrictive for real markets with regime changes and volatility clustering.
+GBM is intentionally minimal and therefore limited: volatility is constant (no clustering or regime shifts), there is no mean-reversion mechanism, and tail behavior is often lighter than observed data unless jump or stochastic-volatility structure is added.
 
 \subsection{OU: interpretation and implications}
 
@@ -146,6 +150,9 @@ Unlike GBM, uncertainty does not grow without bound; it approaches a finite stat
 
 \paragraph{Interpretation.}
 OU is an equilibrium system with noise: random shocks continuously perturb the state, while the restoring force continuously pulls it back.
+
+\paragraph{Limitation.}
+OU is often appropriate for rates, spreads, or latent factors, but it is too simple for many asset-price applications. The Gaussian state can become negative, and a single linear reversion speed cannot reproduce richer nonlinear or regime-dependent dynamics.
 
 \section{Application}
 
@@ -175,19 +182,34 @@ Theoretical first moment is
 \begin{equation}
   \E[S_t] = S_0 e^{\mu t}.
 \end{equation}
-Validation compares this benchmark to empirical path means from simulation. In practice, the comparison is visualized through path and terminal-distribution plots (for example, \texttt{gbm\_paths.png} and \texttt{gbm\_terminal\_hist.png}). For sufficiently fine $\Delta t$ and many paths, the gap between empirical and theoretical mean shrinks; the remaining discrepancy is primarily finite-sample Monte Carlo noise.
+Validation should compare this benchmark to the empirical cross-sectional mean curve
+\begin{equation}
+  \widehat m(t_k) = \frac{1}{N}\sum_{i=1}^N S_{t_k}^{(i)}
+\end{equation}
+on the same plot as $m(t_k)=S_0e^{\mu t_k}$. The recommended figure therefore overlays empirical and theoretical means (alongside the existing path and terminal-distribution visuals such as \texttt{gbm\_paths.png} and \texttt{gbm\_terminal\_hist.png}). A concise scalar diagnostic is
+\begin{equation}
+  \varepsilon_{\text{mean}} = \max_k \frac{|\widehat m(t_k)-m(t_k)|}{m(t_k)}.
+\end{equation}
+Simulation confirms the theory when $\varepsilon_{\text{mean}}$ is small: empirical mean tracks exponential growth closely at early and mid horizons, with larger late-horizon deviation driven by finite-sample variance.
 
 \paragraph{OU validation.}
 Three checks are emphasized:
 \begin{enumerate}[leftmargin=1.5em]
   \item mean reversion: empirical mean path approaches $\mu$,
   \item variance stabilization: empirical variance approaches $\sigma^2/(2\theta)$,
-  \item dependence structure: autocorrelation decays approximately exponentially,
+  \item dependence structure diagnostics: standardized-residual autocorrelation is checked with ACF and Ljung--Box statistics after fitting,
   \begin{equation*}
     \rho(k) \approx e^{-\theta k\Delta t}.
   \end{equation*}
 \end{enumerate}
 The ACF and residual diagnostics (for example, \texttt{ou\_residual\_acf.png}) are used to assess whether the fitted model captures this decay pattern.
+For OU, the central verification plot should track empirical mean and variance against their theoretical targets,
+\begin{equation}
+  \E[X_t] = \mu + (X_0-\mu)e^{-\theta t},
+  \qquad
+  \Var(X_t)=\frac{\sigma^2}{2\theta}\left(1-e^{-2\theta t}\right),
+\end{equation}
+so that convergence to $\mu$ and variance stabilization are visible directly. In words: variance converges to $\sigma^2/(2\theta)$, consistent with theory.
 
 \paragraph{Why mismatch occurs.}
 When theory and simulation do not perfectly align, the dominant causes are finite path count, finite horizon, and discretization error from Euler--Maruyama at larger $\Delta t$.
@@ -291,6 +313,8 @@ This gives the repository a second application domain outside finance while reus
 
 Euler--Maruyama introduces time-discretization error. For many SDEs, strong error scales like $O(\Delta t^{1/2})$ while weak error scales like $O(\Delta t)$. This means large $\Delta t$ can materially affect pathwise quantities and parameter estimation.
 
+In practice, this appears as systematic bias when $\Delta t$ is too coarse. For GBM, Euler stepping distorts the exact log-normal transition and can bias moment-based diagnostics and downstream pricing. For OU, the linearized transition can overstate or understate mean-reversion strength depending on sampling design, which then propagates into $(\theta,\mu,\sigma)$ estimates.
+
 \subsection{Stability and positivity}
 
 For GBM under Euler stepping,
@@ -309,6 +333,17 @@ When an exact transition is available (as for GBM), using it improves both reali
 \end{itemize}
 
 For OU, exact-transition likelihoods similarly reduce approximation error relative to purely Euler-based likelihoods, especially at coarser sampling intervals.
+
+\subsection{Timestep effects and Euler-versus-exact diagnostics}
+
+The numerical error budget has three components:
+\begin{enumerate}[leftmargin=1.5em]
+  \item discretization bias from finite-step dynamics,
+  \item Monte Carlo variance from finite path count,
+  \item finite-horizon effects from limited $T$.
+\end{enumerate}
+
+The repository's grid-study artifacts (for example, \texttt{grid\_study\_summary.csv} and heatmaps) provide a direct timestep sensitivity check: reducing $\Delta t$ lowers discretization-driven error, while increasing replication count lowers sampling noise. For GBM in particular, comparing Euler and exact-step simulations isolates discretization effects cleanly; once exact transitions are used, remaining error is primarily Monte Carlo sampling error.
 
 \section{Code Details and Structure}
 
