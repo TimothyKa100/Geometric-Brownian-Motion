@@ -159,20 +159,35 @@ The script `simulate.py` runs a full experiment:
 Generated artifacts:
 
 - `results/gbm_paths.png`
+- `results/gbm_exact_paths.png`
 - `results/gbm_terminal_hist.png`
 - `results/gbm_hitting_times.png`
+- `results/gbm_mean_vs_theory.png`
+- `results/gbm_moment_validation.csv`
 - `results/ou_paths.png`
 - `results/ou_terminal_hist.png`
 - `results/ou_hitting_times.png`
+- `results/ou_moments_vs_theory.png`
+- `results/ou_moment_validation.csv`
 
 ### Validation
 
 `analysis.py` provides:
 
 - moment summaries (mean, std, skewness, excess kurtosis),
+- empirical-vs-theoretical moment checks:
+	- GBM empirical cross-sectional mean vs $S_0 e^{\mu t}$,
+	- OU empirical mean/variance vs exact OU moments,
 - estimation error metrics:
   - absolute error: $|\hat\theta - \theta|$,
   - relative error: $|\hat\theta - \theta| / |\theta|$.
+
+`simulate.py --mode single` now prints explicit theory-vs-simulation diagnostics, including:
+
+- GBM max relative mean error and relative RMSE,
+- OU mean scaled max error,
+- OU variance max relative error,
+- OU terminal variance gap to stationary target $\sigma^2/(2\theta)$.
 
 ### Estimation
 
@@ -209,14 +224,14 @@ Outputs added in `results/`:
 
 This is relevant for barrier options (GBM), threshold control, and excursion analysis in mean-reverting systems (OU).
 
-### OU-focused extensions
+### OU-focused diagnostics and estimation (implemented)
 
-Potential high-value additions:
+Implemented OU refinement stack includes:
 
-- exact-transition OU MLE (instead of EM approximation),
-- confidence intervals from observed Fisher information / Hessian,
-- stationarity diagnostics and half-life estimation,
-- residual normality and autocorrelation tests.
+- exact-transition OU MLE alongside EM-MLE,
+- asymptotic and bootstrap confidence intervals,
+- residual QQ/ACF/Ljung-Box diagnostics,
+- mean and variance validation against exact OU moment formulas.
 
 ### Implemented advanced package (now available)
 
@@ -273,25 +288,12 @@ Euler–Maruyama is easy to implement and effective for exploratory simulation a
 
 ## Suggested refinements (next iterations)
 
-1. Replace GBM EM simulation with exact exponential step for stronger positivity and lower bias:
-
-	$$
-	S_{n+1}=S_n\exp\left((\mu-\tfrac12\sigma^2)\Delta t + \sigma\sqrt{\Delta t}Z_n\right)
-	$$
-
-2. Add exact-discretization likelihood for OU:
-
-	$$
-	X_{n+1}=\mu + (X_n-\mu)e^{-\theta\Delta t} + \eta_n,
-	\quad
-	\eta_n\sim\mathcal{N}\left(0,\frac{\sigma^2}{2\theta}(1-e^{-2\theta\Delta t})\right)
-	$$
-
-3. Run Monte Carlo estimation studies (many seeds) and report bias/variance/MSE heatmaps across $(\Delta t, T, N)$.
-4. Add robust optimization backends (SciPy L-BFGS-B / trust-constr) while preserving transformed parameterization.
-5. Introduce uncertainty quantification: bootstrap CIs, profile likelihoods, and sensitivity to sampling frequency.
-6. Add model diagnostics: QQ plots, Ljung-Box on residuals, and likelihood-ratio comparisons.
-7. Add jump-diffusion and CIR as advanced comparison baselines.
+1. Add automated regression tests that assert acceptable GBM/OU moment-validation tolerances from `gbm_moment_validation.csv` and `ou_moment_validation.csv`.
+2. Add panel-based moment validation summaries (across different $(\Delta t, T, N)$ settings) directly into `grid_study_summary.csv`.
+3. Add robust optimizer backends (e.g. SciPy L-BFGS-B) with a configurable fallback to coordinate search.
+4. Add optional exact-transition OU simulation mode in `models.py` for side-by-side simulation bias studies (not only exact likelihood estimation).
+5. Add richer data-generating models (e.g. stochastic volatility and jump-intensity dynamics) for stress tests beyond constant-parameter GBM/OU.
+6. Add a lightweight report generator that collates key metrics and figures into a single markdown or PDF summary.
 
 ---
 
