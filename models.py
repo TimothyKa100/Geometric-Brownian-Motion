@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -33,6 +34,24 @@ class OUParams:
 	theta: float
 	mu: float
 	sigma: float
+
+
+@dataclass(frozen=True)
+class HestonParams:
+	"""Parameters for the Heston stochastic volatility model.
+
+	Variance SDE:
+		dv_t = kappa (theta - v_t) dt + sigma sqrt(v_t) dW_t^v
+	Asset SDE:
+		dS_t = mu S_t dt + sqrt(v_t) S_t dW_t^S
+	Corr(dW^S, dW^v) = rho.
+	"""
+
+	kappa: float
+	theta: float
+	sigma: float
+	rho: float
+	v0: float
 
 
 def euler_maruyama_gbm(
@@ -96,6 +115,63 @@ def euler_maruyama_ou(
 		paths[:, step] = prev + params.theta * (params.mu - prev) * dt + params.sigma * sqrt_dt * z
 
 	return times, paths
+
+
+def euler_maruyama_heston(
+	s0: float,
+	mu: float,
+	params: HestonParams,
+	horizon: float,
+	n_steps: int,
+	n_paths: int = 1,
+	seed: Optional[int] = None,
+) -> tuple[Array, Array, Array]:
+	"""Simulate the Heston stochastic volatility model with full truncation."""
+	if s0 <= 0:
+		raise ValueError("s0 must be strictly positive for Heston.")
+	if params.kappa < 0:
+		raise ValueError("kappa must be non-negative.")
+	if params.theta < 0:
+		raise ValueError("theta must be non-negative.")
+	if params.sigma < 0:
+		raise ValueError("sigma must be non-negative.")
+	if not -1.0 <= params.rho <= 1.0:
+		raise ValueError("rho must be between -1 and 1.")
+	if params.v0 < 0:
+		raise ValueError("v0 must be non-negative.")
+	if n_steps <= 0 or n_paths <= 0:
+		raise ValueError("n_steps and n_paths must be positive.")
+
+	if 2.0 * params.kappa * params.theta <= params.sigma**2:
+		warnings.warn(
+			"Feller condition violated: variance may hit zero or become unstable.",
+			RuntimeWarning,
+		)
+
+	rng = np.random.default_rng(seed)
+	dt = horizon / n_steps
+	sqrt_dt = np.sqrt(dt)
+	times = np.linspace(0.0, horizon, n_steps + 1)
+	s_paths = np.empty((n_paths, n_steps + 1), dtype=float)
+	v_paths = np.empty((n_paths, n_steps + 1), dtype=float)
+	s_paths[:, 0] = s0
+	v_paths[:, 0] = params.v0
+
+	for step in range(1, n_steps + 1):
+		z_s = rng.standard_normal(n_paths)
+		z_v = rng.standard_normal(n_paths)
+		dW_s = sqrt_dt * z_s
+		dW_v = params.rho * dW_s + np.sqrt(max(0.0, 1.0 - params.rho**2)) * sqrt_dt * z_v
+		v_prev = np.maximum(v_paths[:, step - 1], 0.0)
+		v_next = v_prev + params.kappa * (params.theta - v_prev) * dt + params.sigma * np.sqrt(v_prev) * dW_v
+		v_next = np.maximum(v_next, 0.0)
+		s_paths[:, step] = np.maximum(
+			s_paths[:, step - 1] * (1.0 + mu * dt + np.sqrt(v_prev) * dW_s),
+			1e-12,
+		)
+		v_paths[:, step] = v_next
+
+	return times, s_paths, v_paths
 
 
 def exact_step_gbm(

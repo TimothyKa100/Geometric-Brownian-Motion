@@ -22,6 +22,46 @@ def plot_sample_paths(times: Array, paths: Array, title: str, max_paths: int = 2
     return fig
 
 
+def plot_heston_sample_paths(
+    times: Array,
+    s_paths: Array,
+    v_paths: Array,
+    title: str,
+    max_paths: int = 20,
+) -> plt.Figure:
+    fig, axes = plt.subplots(2, 1, figsize=(10, 9), sharex=True)
+    n_show = min(s_paths.shape[0], max_paths)
+
+    for i in range(n_show):
+        axes[0].plot(times, s_paths[i], linewidth=1.2, alpha=0.8)
+        axes[1].plot(times, v_paths[i], linewidth=1.2, alpha=0.8)
+
+    axes[0].set_title(f"{title} - Spot paths")
+    axes[0].set_ylabel("S_t")
+    axes[0].grid(True, alpha=0.25)
+
+    axes[1].set_title("Heston variance paths")
+    axes[1].set_xlabel("Time")
+    axes[1].set_ylabel("v_t")
+    axes[1].grid(True, alpha=0.25)
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_leverage_scatter(spot_paths: Array, variance_paths: Array, title: str) -> plt.Figure:
+    returns = np.diff(np.log(spot_paths), axis=1).ravel()
+    variance_changes = np.diff(variance_paths, axis=1).ravel()
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.scatter(returns, variance_changes, s=8, alpha=0.25)
+    ax.set_title(title)
+    ax.set_xlabel("Log return")
+    ax.set_ylabel("Variance change")
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    return fig
+
+
 def plot_terminal_histogram(paths: Array, title: str, bins: int = 40) -> plt.Figure:
     terminal = paths[:, -1]
     fig, ax = plt.subplots(figsize=(8, 5))

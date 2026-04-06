@@ -98,6 +98,22 @@ def ou_theoretical_variance(theta: float, sigma: float, times: Array) -> Array:
     return (sigma**2 / (2.0 * theta)) * (1.0 - np.exp(-2.0 * theta * times))
 
 
+def heston_theoretical_variance_mean(v0: float, kappa: float, theta: float, times: Array) -> Array:
+    return theta + (v0 - theta) * np.exp(-kappa * times)
+
+
+def heston_leverage_correlation(spot_paths: Array, variance_paths: Array) -> float:
+    returns = np.diff(np.log(spot_paths), axis=1).ravel()
+    variance_changes = np.diff(variance_paths, axis=1).ravel()
+    if returns.size == 0 or variance_changes.size == 0:
+        return 0.0
+    ret_std = np.std(returns)
+    var_std = np.std(variance_changes)
+    if ret_std == 0 or var_std == 0:
+        return 0.0
+    return float(np.corrcoef(returns, variance_changes)[0, 1])
+
+
 def max_relative_error(empirical: Array, theoretical: Array, eps: float = 1e-12) -> float:
     denom = np.maximum(np.abs(theoretical), eps)
     return float(np.max(np.abs(empirical - theoretical) / denom))

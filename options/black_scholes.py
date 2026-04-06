@@ -73,3 +73,48 @@ def black_scholes_greeks(S0: float, K: float, T: float, r: float, sigma: float) 
         "call_rho": float(call_rho),
         "put_rho": float(put_rho),
     }
+
+
+def black_scholes_implied_vol(
+    price: float,
+    S0: float,
+    K: float,
+    T: float,
+    r: float,
+    tol: float = 1e-6,
+    max_iter: int = 100,
+) -> float:
+    """Invert the Black-Scholes call price to implied volatility using bisection."""
+    if S0 <= 0 or K <= 0:
+        raise ValueError("S0 and K must be strictly positive.")
+    if T < 0:
+        raise ValueError("T must be non-negative.")
+
+    if T == 0.0:
+        return 0.0 if price <= max(S0 - K, 0.0) else 1.0
+
+    intrinsic = max(S0 - K * math.exp(-r * T), 0.0)
+    if price <= intrinsic:
+        return 0.0
+
+    low = 1e-8
+    high = 4.0
+    high_price = black_scholes_call_price(S0, K, T, r, high)
+    while high_price < price and high < 10.0:
+        high *= 2.0
+        high_price = black_scholes_call_price(S0, K, T, r, high)
+
+    if price >= high_price:
+        return high
+
+    for _ in range(max_iter):
+        mid = 0.5 * (low + high)
+        mid_price = black_scholes_call_price(S0, K, T, r, mid)
+        if abs(mid_price - price) < tol:
+            return float(mid)
+        if mid_price > price:
+            high = mid
+        else:
+            low = mid
+
+    return float(0.5 * (low + high))

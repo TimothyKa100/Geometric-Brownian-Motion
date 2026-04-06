@@ -14,6 +14,8 @@ from analysis import (
 	gbm_empirical_mean,
 	gbm_theoretical_mean,
 	gbm_standardized_residuals,
+	heston_leverage_correlation,
+	heston_theoretical_variance_mean,
 	likelihood_ratio_test_ou_theta_zero,
 	ljung_box_q,
 	max_relative_error,
@@ -43,10 +45,12 @@ from estimation import (
 from first_passage import first_hitting_times, summarize_hitting_times
 from models import (
 	GBMParams,
+	HestonParams,
 	OUParams,
 	euler_maruyama_cir,
 	euler_maruyama_gbm,
 	euler_maruyama_gbm_time_varying,
+	euler_maruyama_heston,
 	euler_maruyama_jump_diffusion_gbm,
 	euler_maruyama_ou,
 	euler_maruyama_ou_time_varying,
@@ -60,6 +64,7 @@ from options.black_scholes import (
 	black_scholes_put_price,
 )
 from options.demo import run_options_demo
+from options.heston import heston_call_price, heston_implied_vol_surface
 from options.monte_carlo import (
 	mc_price_asian_arithmetic_call_gbm,
 	mc_price_barrier_gbm,
@@ -78,6 +83,8 @@ from plots import (
 	plot_acf,
 	plot_heatmap,
 	plot_hitting_time_histogram,
+	plot_heston_sample_paths,
+	plot_leverage_scatter,
 	plot_mean_comparison,
 	plot_ou_moment_comparison,
 	plot_qq,
@@ -381,6 +388,91 @@ def run_ou_experiment(output_dir: Path) -> tuple[np.ndarray, float, OUParams, ob
 	plt.close(fig_moment_check)
 
 	return representative_path, dt, params, est_em, est_exact
+
+
+def run_heston_experiment(output_dir: Path) -> tuple[np.ndarray, np.ndarray, float, HestonParams]:
+	params = HestonParams(kappa=3.0, theta=0.04, sigma=0.25, rho=-0.7, v0=0.04)
+	s0 = 100.0
+	mu = 0.03
+	horizon = 1.0
+	n_steps = 252
+	n_paths = 2000
+	seed = 13
+	dt = horizon / n_steps
+
+	times, s_paths, v_paths = euler_maruyama_heston(
+		s0=s0,
+		mu=mu,
+		params=params,
+		horizon=horizon,
+		n_steps=n_steps,
+		n_paths=n_paths,
+		seed=seed,
+	)
+
+	empirical_var_mean = np.mean(v_paths, axis=0)
+	theoretical_var_mean = heston_theoretical_variance_mean(v0=params.v0, kappa=params.kappa, theta=params.theta, times=times)
+	leverage_corr = heston_leverage_correlation(s_paths, v_paths)
+
+	print("\nHeston experiment summary:")
+	print(f"  kappa={params.kappa:.3f}, theta={params.theta:.3f}, sigma={params.sigma:.3f}, rho={params.rho:.3f}, v0={params.v0:.3f}")
+	print(f"  leverage correlation: {leverage_corr:.4f}")
+
+	heston_price = heston_call_price(S0=s0, K=s0, T=horizon, r=0.03, params=params)
+	print(f"  Heston ATM call price (T={horizon}): {heston_price:.4f}")
+
+	fig_paths = plot_heston_sample_paths(times, s_paths[:30], v_paths[:30], "Heston sample paths")
+	fig_terminal = plot_terminal_histogram(s_paths, "Heston terminal distribution")
+	fig_var_mean = plot_mean_comparison(
+		times=times,
+		empirical=empirical_var_mean,
+		theoretical=theoretical_var_mean,
+		title="Heston empirical vs theoretical variance mean",
+		ylabel="Variance",
+	)
+
+	fig_paths.savefig(output_dir / "heston_paths.png", dpi=130)
+	fig_terminal.savefig(output_dir / "heston_terminal_hist.png", dpi=130)
+	fig_var_mean.savefig(output_dir / "heston_variance_mean.png", dpi=130)
+
+	fig_leverage = plot_leverage_scatter(s_paths, v_paths, "Heston leverage effect")
+	fig_leverage.savefig(output_dir / "heston_leverage_scatter.png", dpi=130)
+
+	heston_surface = heston_implied_vol_surface(
+		S0=s0,
+		r=mu,
+		params=params,
+		strikes=np.linspace(70.0, 140.0, 15, dtype=float),
+		maturities=np.linspace(0.25, 1.5, 10, dtype=float),
+	)
+	fig_heston_surface = plot_heatmap(
+		matrix=heston_surface,
+		x_labels=[f"{k:.0f}" for k in np.linspace(70.0, 140.0, 15)],
+		y_labels=[f"{T:.2f}" for T in np.linspace(0.25, 1.5, 10)],
+		title="Heston implied volatility surface",
+		colorbar_label="Implied vol",
+	)
+	fig_heston_surface.axes[0].set_xlabel("Strike K")
+	fig_heston_surface.axes[0].set_ylabel("Maturity T")
+	fig_heston_surface.savefig(output_dir / "heston_implied_vol_surface.png", dpi=130)
+	plt.close(fig_heston_surface)
+
+	heston_validation_rows: list[list[float | str]] = []
+	for t, emp, theo in zip(times, empirical_var_mean, theoretical_var_mean):
+		rel_err = abs(emp - theo) / max(abs(theo), 1e-12)
+		heston_validation_rows.append([float(t), float(emp), float(theo), float(rel_err)])
+	_write_csv(
+		output_dir / "heston_variance_validation.csv",
+		header=["time", "empirical_variance_mean", "theoretical_variance_mean", "relative_error"],
+		rows=heston_validation_rows,
+	)
+
+	plt.close(fig_paths)
+	plt.close(fig_terminal)
+	plt.close(fig_var_mean)
+	plt.close(fig_leverage)
+
+	return s_paths[0], v_paths[0], dt, params
 
 
 def run_residual_diagnostics(
@@ -1061,9 +1153,9 @@ def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description="SDE simulation and estimation runner")
 	parser.add_argument(
 		"--mode",
-		choices=["single", "study", "all", "full", "options", "physics"],
+		choices=["single", "study", "all", "full", "options", "physics", "heston"],
 		default="all",
-		help="single: one-shot experiments; study: Monte Carlo only; all: single+study; full: all advanced modules; options: standalone options app; physics: standalone physics app",
+		help="single: one-shot experiments; study: Monte Carlo only; all: single+study; full: all advanced modules; options: standalone options app; physics: standalone physics app; heston: Heston experiment only",
 	)
 	parser.add_argument("--mc-reps", type=int, default=300, help="Replications for Monte Carlo estimation study")
 	parser.add_argument("--coverage-reps", type=int, default=60, help="Replications for CI coverage study")
@@ -1097,9 +1189,15 @@ def main() -> None:
 		print("\nAll requested tasks completed.")
 		return
 
+	if args.mode == "heston":
+		run_heston_experiment(output_dir=output_dir)
+		print("\nAll requested tasks completed.")
+		return
+
 	if args.mode in ("single", "all", "full"):
 		gbm_path, gbm_dt, _gbm_params, gbm_est = run_gbm_experiment(output_dir=output_dir)
 		ou_path, ou_dt, _ou_params, ou_est, _ou_exact = run_ou_experiment(output_dir=output_dir)
+		_heston_spot, _heston_variance, _heston_dt, _heston_params = run_heston_experiment(output_dir=output_dir)
 		run_residual_diagnostics(
 			output_dir=output_dir,
 			gbm_path=gbm_path,

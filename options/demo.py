@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from models import GBMParams, euler_maruyama_gbm
+from models import GBMParams, HestonParams, euler_maruyama_gbm
 from options.black_scholes import (
 	black_scholes_call_price,
 	black_scholes_digital_call_price,
 	black_scholes_greeks,
 	black_scholes_put_price,
 )
+from options.heston import heston_call_price, heston_implied_vol_surface
 from options.greeks import run_greeks_demo
 from options.monte_carlo import (
 	mc_price_asian_arithmetic_call_gbm,
@@ -161,6 +163,55 @@ def _plot_barrier_dashboard(output_dir: Path, S0: float, K: float, T: float, r: 
 	return path
 
 
+def _plot_heston_pricing_curve(output_dir: Path, S0: float, T: float, r: float, params: HestonParams) -> Path:
+	strikes = np.linspace(70.0, 140.0, 35, dtype=float)
+	heston_prices = np.array([heston_call_price(S0, float(K), T, r, params) for K in strikes])
+	bs_sigma = math.sqrt(params.theta)
+	bs_prices = np.array([black_scholes_call_price(S0, float(K), T, r, bs_sigma) for K in strikes])
+
+	fig, ax = plt.subplots(figsize=(9, 5))
+	ax.plot(strikes, heston_prices, "o-", color="#3C3489", lw=2, label="Heston call")
+	ax.plot(strikes, bs_prices, "x--", color="#0F6E56", lw=1.5, label=f"BS call (σ={bs_sigma:.3f})")
+	ax.axvline(S0, color="gray", lw=1, ls=":")
+	ax.set_title("Heston vs Black-Scholes call prices")
+	ax.set_xlabel("Strike K")
+	ax.set_ylabel("Call price")
+	ax.legend(fontsize=8)
+	ax.grid(True, alpha=0.25)
+	fig.tight_layout()
+	path = output_dir / "heston_pricing_vs_bs.png"
+	fig.savefig(path, dpi=140, bbox_inches="tight")
+	plt.close(fig)
+	return path
+
+
+def _plot_heston_implied_vol_surface(output_dir: Path, S0: float, r: float, params: HestonParams) -> Path:
+	strikes = np.linspace(70.0, 140.0, 15, dtype=float)
+	maturities = np.linspace(0.25, 2.0, 10, dtype=float)
+	surface = heston_implied_vol_surface(S0=S0, r=r, params=params, strikes=strikes, maturities=maturities)
+
+	fig, ax = plt.subplots(figsize=(10, 6))
+	im = ax.imshow(
+		surface,
+		origin="lower",
+		aspect="auto",
+		cmap="viridis",
+		extent=[strikes[0], strikes[-1], maturities[0], maturities[-1]],
+	)
+	cbar = fig.colorbar(im, ax=ax)
+	cbar.set_label("Implied volatility")
+	ax.set_title("Heston implied volatility surface")
+	ax.set_xlabel("Strike K")
+	ax.set_ylabel("Maturity T")
+	ax.set_xticks(np.linspace(strikes[0], strikes[-1], 6))
+	ax.set_yticks(np.linspace(maturities[0], maturities[-1], 5))
+	fig.tight_layout()
+	path = output_dir / "heston_implied_vol_surface.png"
+	fig.savefig(path, dpi=140, bbox_inches="tight")
+	plt.close(fig)
+	return path
+
+
 def run_options_demo(output_dir: Path) -> None:
 	"""Standalone options application with the final multi-panel plots."""
 	print("\nRunning standalone options dashboard...")
@@ -195,6 +246,31 @@ def run_options_demo(output_dir: Path) -> None:
 	barrier_path = _plot_barrier_dashboard(output_dir, S0, K, T, r, sigma)
 	greeks_path = run_greeks_demo(output_dir, S0=S0, K=K, T=T, r=r, sigma=sigma)
 
+	params = HestonParams(kappa=2.0, theta=0.04, sigma=0.25, rho=-0.7, v0=0.04)
+	heston_path = _plot_heston_pricing_curve(output_dir, S0, T, r, params)
+	heston_surface_path = _plot_heston_implied_vol_surface(output_dir, S0, r, params)
+
 	print(f"Saved options pricing dashboard -> {pricing_path.name}")
 	print(f"Saved barrier dashboard -> {barrier_path.name}")
 	print(f"Saved greeks dashboard -> {greeks_path.name}")
+	print(f"Saved Heston pricing comparison -> {heston_path.name}")
+	print(f"Saved Heston implied volatility surface -> {heston_surface_path.name}")
+
+
+def run_heston_demo(output_dir: Path) -> None:
+	"""Standalone Heston pricing demonstration."""
+	print("\nRunning standalone Heston demo...")
+	output_dir.mkdir(parents=True, exist_ok=True)
+
+	S0 = 100.0
+	T = 1.0
+	r = 0.03
+	params = HestonParams(kappa=2.0, theta=0.04, sigma=0.25, rho=-0.7, v0=0.04)
+
+	heston_price = heston_call_price(S0=S0, K=S0, T=T, r=r, params=params)
+	print(f"Heston ATM call price = {heston_price:.4f}")
+
+	heston_path = _plot_heston_pricing_curve(output_dir, S0, T, r, params)
+	heston_surface_path = _plot_heston_implied_vol_surface(output_dir, S0, r, params)
+	print(f"Saved Heston pricing comparison -> {heston_path.name}")
+	print(f"Saved Heston implied volatility surface -> {heston_surface_path.name}")
