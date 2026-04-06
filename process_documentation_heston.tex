@@ -1,0 +1,289 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  pdftitle={Geometric Brownian Motion and Ornstein-Uhlenbeck SDE Lab with Heston Extension},
+}
+
+\title{Geometric Brownian Motion and Ornstein-Uhlenbeck SDE Lab}
+\author{Timothy Ka, Isaac Yang}
+\date{\today}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\N}{\mathcal{N}}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document describes the stochastic differential equation (SDE) models implemented in the codebase, the practical applications built on top of them, and the way the repository is organized. The focus is on two core processes: geometric Brownian motion (GBM) and Ornstein-Uhlenbeck (OU), together with their simulation, estimation, validation, option pricing, and physics-inspired extensions. The repository is now extended with a Heston stochastic volatility module to demonstrate richer, two-factor price dynamics and implied volatility surface generation.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Theoretical Model}
+
+\subsection{Stochastic differential equations}
+
+The repository is built around It\^o SDEs of the form
+\begin{equation}
+  \dd X_t = a(X_t,t)\,\dd t + b(X_t,t)\,\dd W_t,
+\end{equation}
+where $a(X_t,t)$ is the drift, $b(X_t,t)$ is the diffusion, and $W_t$ is standard Brownian motion. The drift captures the deterministic trend while the diffusion captures random perturbations.
+
+\subsection{Geometric Brownian motion}
+
+GBM is the positive-valued model used for asset prices:
+\begin{equation}
+  \dd S_t = \mu S_t\,\dd t + \sigma S_t\,\dd W_t.
+\end{equation}
+
+The closed-form solution is
+\begin{equation}
+  S_t = S_0 \exp\left(\left(\mu - \tfrac{1}{2}\sigma^2\right)t + \sigma W_t\right),
+\end{equation}
+which implies that $S_t$ is log-normal and strictly positive in continuous time. This makes GBM the standard baseline for equity-style price modeling and a natural starting point for Black-Scholes pricing.
+
+In discrete time, the code uses the Euler--Maruyama update
+\begin{equation}
+  S_{n+1} = S_n\left(1 + \mu\Delta t + \sigma\sqrt{\Delta t}\,Z_n\right),
+  \qquad Z_n \sim \N(0,1).
+\end{equation}
+Because this approximation can produce rare negative values for coarse steps, the implementation clips values to a small positive floor. The code also includes the exact exponential transition
+\begin{equation}
+  S_{n+1} = S_n\exp\left(\left(\mu - \tfrac{1}{2}\sigma^2\right)\Delta t + \sigma\sqrt{\Delta t}\,Z_n\right),
+\end{equation}
+which preserves positivity exactly and is preferred in the option-pricing modules.
+
+\subsection{Ornstein-Uhlenbeck process}
+
+The OU process is a mean-reverting Gaussian model:
+\begin{equation}
+  \dd X_t = \theta(\mu - X_t)\,\dd t + \sigma\,\dd W_t.
+\end{equation}
+
+Its mean reversion can be seen from the exact conditional mean:
+\begin{equation}
+  \E[X_t\mid X_0] = \mu + (X_0 - \mu)e^{-\theta t}.
+\end{equation}
+
+The exact transition is Gaussian:
+\begin{align}
+  X_{t+\Delta t}\mid X_t &\sim \N\left(m_t, v_t\right), \\
+  m_t &= \mu + (X_t-\mu)e^{-\theta\Delta t}, \\
+  v_t &= \frac{\sigma^2}{2\theta}\left(1-e^{-2\theta\Delta t}\right), \qquad \theta > 0.
+\end{align}
+
+The code uses the Euler--Maruyama approximation for most simulations:
+\begin{equation}
+  X_{n+1} = X_n + \theta(\mu - X_n)\Delta t + \sigma\sqrt{\Delta t}\,Z_n.
+\end{equation}
+
+This process is used directly in the SDE lab and indirectly as the velocity model in the physics extension.
+
+\subsection{Other simulated regimes}
+
+The model layer also includes a few controlled extensions:
+\begin{itemize}[leftmargin=1.2em]
+  \item Jump-diffusion GBM with multiplicative log-normal jumps.
+  \item CIR dynamics with full-truncation Euler discretization.
+  \item Time-varying GBM and OU coefficients for non-stationary experiments.
+\end{itemize}
+
+These are not the core theoretical focus, but they are useful for stress-testing the same simulation and estimation pipeline under richer dynamics.
+
+\subsection{Heston stochastic volatility model}
+
+The new Heston extension introduces stochastic variance into the asset-price model. The system is:
+\begin{align}
+  \dd S_t &= \mu S_t \,\dd t + \sqrt{v_t} \, S_t \,\dd W_t^S, \\
+  \dd v_t &= \kappa(\theta - v_t)\,\dd t + \sigma\sqrt{v_t} \,\dd W_t^v,
+\end{align}
+with correlated Brownian motions satisfying
+\begin{equation}
+  \dd\langle W^S, W^v \rangle_t = \rho\,\dd t.
+\end{equation}
+
+Here, $v_t$ is the instantaneous variance, $\kappa$ is the speed of mean reversion, $\theta$ is the long-run variance, $\sigma$ is the volatility of volatility, and $\rho$ is the correlation parameter that produces the leverage effect. This model can capture time-varying volatility and skew in option prices that GBM alone cannot.
+
+The implementation uses a full-truncation Euler-style discretization to maintain non-negativity of $v_t$ while simulating correlated spot and variance increments. The code returns both spot paths and variance paths, which are used for both path diagnostics and pricing experiments.
+
+\section{Model Understanding}
+
+\subsection{GBM: interpretation and implications}
+
+\paragraph{Why the noise is proportional to $S_t$.}
+In GBM, the diffusion term is $\sigma S_t\,\dd W_t$. Because the diffusion is proportional to the level, the relative increment
+\begin{equation}
+  \frac{\dd S_t}{S_t} = \mu\,\dd t + \sigma\,\dd W_t
+\end{equation}
+has level-independent instantaneous variance $\sigma^2\dd t$. The implication is that stationarity is expected in log-returns rather than in prices, which matches common empirical practice in financial time-series modeling.
+
+\paragraph{Why $\log S_t$ is linear in $W_t$.}
+Applying It\^o's lemma to $f(S_t)=\log S_t$ gives
+\begin{equation}
+  \dd \log S_t = \left(\mu - \tfrac{1}{2}\sigma^2\right)\dd t + \sigma\,\dd W_t.
+\end{equation}
+Integrating over time,
+\begin{equation}
+  \log S_t = \log S_0 + \left(\mu - \tfrac{1}{2}\sigma^2\right)t + \sigma W_t,
+\end{equation}
+which is affine in Brownian motion.
+
+\paragraph{Consequence.}
+Since $\log S_t$ is Gaussian, $S_t$ is log-normal. In price space this produces a positively skewed distribution with a pronounced right tail relative to a symmetric Gaussian benchmark.
+
+\paragraph{Limitation.}
+GBM is intentionally minimal and therefore limited: volatility is constant (no clustering or regime shifts), there is no mean-reversion mechanism, and tail behavior is often lighter than observed data unless jump or stochastic-volatility structure is added.
+
+\subsection{OU: interpretation and implications}
+
+\paragraph{Why drift pulls toward $\mu$.}
+The drift term is $\theta(\mu-X_t)$. If $X_t>\mu$, then drift is negative; if $X_t<\mu$, then drift is positive. Therefore the deterministic component always pushes the process back toward the long-run level $\mu$.
+
+\paragraph{Why variance stabilizes.}
+For OU,
+\begin{equation}
+  \Var(X_t) = \frac{\sigma^2}{2\theta}\left(1-e^{-2\theta t}\right)
+  \xrightarrow[t\to\infty]{}
+  \frac{\sigma^2}{2\theta}.
+\end{equation}
+Unlike GBM, uncertainty does not grow without bound; it approaches a finite stationary variance.
+
+\paragraph{Interpretation.}
+OU is an equilibrium system with noise: random shocks continuously perturb the state, while the restoring force continuously pulls it back.
+
+\paragraph{Limitation.}
+OU is often appropriate for rates, spreads, or latent factors, but it is too simple for many asset-price applications. The Gaussian state can become negative, and a single linear reversion speed cannot reproduce richer nonlinear or regime-dependent dynamics.
+
+\section{Application}
+
+\subsection{Simulation and validation workflow}
+
+The main runner in \texttt{simulate.py} orchestrates the experiment pipeline:
+\begin{enumerate}[leftmargin=1.5em]
+  \item simulate GBM and OU paths,
+  \item compute distributional summary statistics,
+  \item estimate parameters on representative paths,
+  \item compare estimates against known truth,
+  \item compute first-passage summaries,
+  \item generate plots and save results to \texttt{results/}.
+\end{enumerate}
+
+The validation layer in \texttt{analysis.py} computes moment summaries, standardized residuals, and estimation errors. For a true value $\theta$ and estimate $\hat\theta$, the code reports
+\begin{equation}
+  \text{absolute error} = |\hat\theta - \theta|,
+  \qquad
+  \text{relative error} = \frac{|\hat\theta - \theta|}{\max(|\theta|,10^{-12})}.
+\end{equation}
+
+The Heston extension is now part of the same workflow. The code includes a dedicated Heston experiment that simulates correlated spot and variance paths, compares empirical variance mean against the theoretical variance mean, measures leverage correlation, and generates an implied volatility surface by pricing Heston calls and inverting them to Black-Scholes implied volatilities.
+
+\subsection{Explicit validation results and interpretation}
+
+\paragraph{GBM validation.}
+Theoretical first moment is
+\begin{equation}
+  \E[S_t] = S_0 e^{\mu t}.
+\end{equation}
+Validation should compare this benchmark to the empirical cross-sectional mean curve
+\begin{equation}
+  \widehat m(t_k) = \frac{1}{N}\sum_{i=1}^N S_{t_k}^{(i)}
+\end{equation}
+on the same plot as $m(t_k)=S_0e^{\mu t_k}$. The recommended figure therefore overlays empirical and theoretical means (alongside the existing path and terminal-distribution visuals such as \texttt{gbm\_paths.png} and \texttt{gbm\\_terminal\_hist.png}). A concise scalar diagnostic is
+\begin{equation}
+  \varepsilon_{\text{mean}} = \max_k \frac{|\widehat m(t_k)-m(t_k)|}{m(t_k)}.
+\end{equation}
+Simulation confirms the theory when $\varepsilon_{\text{mean}}$ is small: empirical mean tracks exponential growth closely at early and mid horizons, with larger late-horizon deviation driven by finite-sample variance.
+
+\paragraph{OU validation.}
+Three checks are emphasized:
+\begin{enumerate}[leftmargin=1.5em]
+  \item mean reversion: empirical mean path approaches $\mu$,
+  \item variance stabilization: empirical variance approaches $\sigma^2/(2\theta)$,
+  \item dependence structure diagnostics: standardized-residual autocorrelation is checked with ACF and Ljung--Box statistics after fitting,
+  \begin{equation*}
+    \rho(k) \approx e^{-\theta k\Delta t}.
+  \end{equation*}
+\end{enumerate}
+The ACF and residual diagnostics (for example, \texttt{ou\_residual\_acf.png}) are used to assess whether the fitted model captures this decay pattern. For OU, the central verification plot should track empirical mean and variance against their theoretical targets,
+\begin{equation}
+  \E[X_t] = \mu + (X_0-\mu)e^{-\theta t},
+  \qquad
+  \Var(X_t)=\frac{\sigma^2}{2\theta}\left(1-e^{-2\theta t}\right),
+\end{equation}
+so that convergence to $\mu$ and variance stabilization are visible directly. In words: variance converges to $\sigma^2/(2\theta)$, consistent with theory.
+
+\paragraph{Heston validation.}
+The new Heston module produces two-factor dynamics with stochastic variance. Important checks include:
+\begin{itemize}[leftmargin=1.2em]
+  \item empirical variance mean versus the theoretical variance mean,
+  \item leverage correlation between log returns and variance changes,
+  \item consistency of Heston call prices with a smoothly varying implied volatility surface.
+\end{itemize}
+This extension is validated with sample-path diagnostics, variance mean plots, leverage scatter plots, and the generated surface \texttt{heston\_implied\_vol\_surface.png}.
+
+\paragraph{Why mismatch occurs.}
+When theory and simulation do not perfectly align, the dominant causes are finite path count, finite horizon, and discretization error from Euler--Maruyama at larger $\Delta t$.
+
+\subsection{Depth-first takeaways (rather than feature catalogue)}
+
+This project is strongest when read through three deep threads:
+\begin{itemize}[leftmargin=1.2em]
+  \item \textbf{Behavioral contrast:} GBM is multiplicative and non-mean-reverting, while OU is additive and mean-reverting with finite stationary variance.
+  \item \textbf{Estimation quality:} transformed MLEs enforce parameter constraints and support direct error analysis (bias, RMSE, and confidence intervals).
+  \item \textbf{Monte Carlo convergence:} for option pricing and Greeks, simulation error scales with path count and can be separated from discretization effects.
+\end{itemize}
+
+\subsection{Parameter estimation}
+
+The estimation layer in \texttt{estimation.py} implements lightweight maximum likelihood estimators under discretized transition models.
+
+For GBM, the log return model is
+\begin{equation}
+  r_n = \log\left(\frac{S_{n+1}}{S_n}\right)
+  \sim \N\left(\left(\mu - \tfrac{1}{2}\sigma^2\right)\Delta t,\,\sigma^2\Delta t\right).
+\end{equation}
+The optimization is performed over transformed parameters $\bigl(\mu, \log\sigma\bigr)$ to guarantee positivity of $\sigma$.
+
+For OU, the Euler transition approximation is
+\begin{equation}
+  X_{n+1}\mid X_n \sim \N\left(X_n + \theta(\mu - X_n)\Delta t,\,\sigma^2\Delta t\right),
+\end{equation}
+and the code estimates $\bigl(\log\theta, \mu, \log\sigma\bigr)$. An exact-transition OU MLE is also available and is used where the exact Gaussian transition is appropriate.
+
+The optimizer is a simple coordinate-search routine with step shrinkage. That choice keeps the code dependency-light and easy to inspect, at the cost of being less sophisticated than a gradient-based solver.
+
+\subsection{Monte Carlo studies and uncertainty quantification}
+
+The repository includes repeated-simulation studies to measure estimator variability across many synthetic paths. The code writes replication-level estimates and summary statistics such as mean, bias, standard deviation, variance, and RMSE.
+
+It also includes uncertainty quantification features:
+\begin{itemize}[leftmargin=1.2em]
+  \item asymptotic confidence intervals from observed information,
+  \item parametric bootstrap confidence intervals,
+  \item empirical coverage summaries,
+  \item grid studies over $\Delta t$, $T$, and $N$.
+\end{itemize}
+
+These features are intended to evaluate finite-sample behavior rather than just point estimation.
+
+\subsection{First passage and barrier-style events}
+
+The code generates first-hitting-time summaries for paths crossing user-specified thresholds. This includes one-sided hitting probabilities, mean and median hitting times, and terminal distributions conditional on hitting or not hitting the barrier.
+
+\end{document}
